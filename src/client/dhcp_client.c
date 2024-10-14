@@ -12,7 +12,8 @@
 void start_dhcp_client() {
     int sockfd;
     struct sockaddr_in server_addr, client_addr;
-    int broadcastEnable = 1; 
+    int broadcastEnable = 1;
+    struct in_addr offered_ip;  // Aquí almacenamos la IP ofrecida
     
     // Crear socket
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -51,7 +52,13 @@ void start_dhcp_client() {
     send_dhcp_discover(sockfd, &server_addr);
 
     // Recibir respuesta (DHCP Offer)
-    receive_dhcp_offer(sockfd);
+    receive_dhcp_offer(sockfd, &offered_ip);
+
+    // Enviar solicitud DHCPREQUEST
+    send_dhcp_request(sockfd, &server_addr, &offered_ip);
+
+    // Recibir confirmación DHCPACK
+    receive_dhcp_ack(sockfd);
 
     // Cerrar el socket al finalizar
     close(sockfd);
@@ -90,19 +97,72 @@ void send_dhcp_discover(int sockfd, struct sockaddr_in *server_addr) {
     }
 }
 
-void receive_dhcp_offer(int sockfd) {
-    char offer_message[BUFFER_SIZE];
+void receive_dhcp_offer(int sockfd, struct in_addr *offered_ip) {
+    struct dhcp_packet offer_message;
     struct sockaddr_in server_addr;
     socklen_t addr_len = sizeof(server_addr);
 
     // Recibir el mensaje DHCP Offer del servidor
-    int recv_len = recvfrom(sockfd, offer_message, sizeof(offer_message), 0,
+    int recv_len = recvfrom(sockfd, &offer_message, sizeof(offer_message), 0,
                             (struct sockaddr *)&server_addr, &addr_len);
     if (recv_len < 0) {
         perror("Error al recibir el mensaje DHCPOFFER");
     } else {
         printf("Mensaje DHCPOFFER recibido.\n");
-    }
 
-    // Procesa el mensaje DHCP Offer aquí (extraer dirección IP, máscara, etc.)
+        offered_ip->s_addr = offer_message.yiaddr;  // Asignamos el valor de yiaddr a la estructura in_addr
+        printf("Dirección IP ofrecida: %s\n", inet_ntoa(*offered_ip));  // Imprimir la dirección IP ofrecida
+    }
+}
+
+void send_dhcp_request(int sockfd, struct sockaddr_in *server_addr, struct in_addr *offered_ip) {
+    struct dhcp_packet request_message;
+
+    // Inicializar el mensaje DHCPREQUEST
+    memset(&request_message, 0, sizeof(request_message)); // Limpiar la estructura
+    request_message.op = 3;  // Solicitud (1 para cliente)
+    request_message.htype = 1;  // Tipo de hardware: Ethernet
+    request_message.hlen = 6;  // Longitud de hardware: 6 para dirección MAC
+    request_message.xid = htonl(0x3903F326);  // Usar el mismo Transaction ID del DHCPDISCOVER
+    
+    // Configurar la dirección MAC del cliente
+    request_message.chaddr[0] = 0x00;
+    request_message.chaddr[1] = 0x1A;
+    request_message.chaddr[2] = 0x2B;
+    request_message.chaddr[3] = 0x3C;
+    request_message.chaddr[4] = 0x4D;
+    request_message.chaddr[5] = 0x5E;
+
+    // Usar la IP ofrecida (recibida en el DHCPOFFER)
+    request_message.yiaddr = offered_ip->s_addr;
+
+    // Opciones DHCP (53 = DHCP Message Type, 3 = DHCPREQUEST)
+    request_message.options[0] = 53;
+    request_message.options[1] = 3;
+    request_message.options[2] = DHCP_REQUEST;  // DHCPREQUEST
+
+    // Enviar el mensaje al servidor DHCP
+    int send_len = sendto(sockfd, &request_message, sizeof(request_message), 0,
+                          (struct sockaddr *)server_addr, sizeof(*server_addr));
+    if (send_len < 0) {
+        perror("Error al enviar el mensaje DHCPREQUEST");
+    } else {
+        printf("Mensaje DHCPREQUEST enviado.\n");
+    }
+}
+
+void receive_dhcp_ack(int sockfd) {
+    struct dhcp_packet ack_message;
+    struct sockaddr_in server_addr;
+    socklen_t addr_len = sizeof(server_addr);
+
+    // Recibir el mensaje DHCPACK del servidor
+    int recv_len = recvfrom(sockfd, &ack_message, sizeof(ack_message), 0,
+                            (struct sockaddr *)&server_addr, &addr_len);
+    if (recv_len < 0) {
+        perror("Error al recibir el mensaje DHCPACK");
+    } else {
+        printf("Mensaje DHCPACK recibido.\n");
+        printf("Dirección IP asignada: %s\n", inet_ntoa(*(struct in_addr *)&ack_message.yiaddr));
+    }
 }

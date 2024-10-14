@@ -9,6 +9,8 @@
 
 #define DHCP_DISCOVER 1
 #define DHCP_OFFER 2
+#define DHCP_REQUEST 3
+#define DHCP_ACK 5
 
 // Estructura básica del paquete DHCP (simplificado)
 
@@ -78,8 +80,11 @@ void handle_dhcp_requests(int sockfd) {
             
             // Asignar una dirección IP y enviar una oferta
             send_dhcp_offer(sockfd, request, &client_addr, &ip_range);
+        } else if (request->op == DHCP_REQUEST) {
+            printf("DHCP Request recibido de %s\n", inet_ntoa(client_addr.sin_addr));
+            send_dhcp_ack(sockfd, request, &client_addr, &ip_range);
         } else {
-            printf("No es un mensaje DHCP Discover.\n");
+            printf("Mensaje DHCP no reconocido.\n");
         }
     }
 }
@@ -132,4 +137,37 @@ char* assign_ip_address(ip_range_t *ip_range) {
     sprintf(assigned_ip, "192.168.1.%d", next_ip);
     next_ip++;
     return assigned_ip;
+}
+
+void send_dhcp_ack(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range) {
+    struct dhcp_packet response;
+    memset(&response, 0, sizeof(response));
+
+    // Configurar el mensaje DHCP ACK
+    response.op = 5; // Respuesta del servidor
+    response.htype = 1; // Tipo de hardware (Ethernet)
+    response.hlen = 6; // Longitud de la dirección MAC
+    response.xid = request->xid; // Copiamos el Transaction ID del cliente
+    memcpy(response.chaddr, request->chaddr, 16); // Copiamos la dirección MAC del cliente
+
+    // Asignar la dirección IP previamente ofrecida (yiaddr del DHCPOFFER)
+    response.yiaddr = request->yiaddr;
+
+    // Configurar las opciones adicionales (máscara de subred, gateway, DNS)
+    response.options[0] = 1; // Máscara de subred
+    response.options[1] = 4; // Longitud de la opción
+    response.options[2] = 255; response.options[3] = 255;
+    response.options[4] = 255; response.options[5] = 0; // 255.255.255.0
+
+    response.options[6] = 3; // Gateway
+    response.options[7] = 4;
+    response.options[8] = 192; response.options[9] = 168;
+    response.options[10] = 1; response.options[11] = 1; // 192.168.1.1
+
+    // Enviar el mensaje DHCP ACK
+    if (sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
+        perror("Error al enviar el DHCP ACK");
+    } else {
+        printf("DHCP ACK enviado a %s\n", inet_ntoa(client_addr->sin_addr));
+    }
 }

@@ -2,9 +2,12 @@
 #define DHCP_CLIENT_H
 
 #include <arpa/inet.h>
+#include <stdint.h>  // Para los tipos de datos uint8_t, uint32_t, etc.
 
 #define DHCP_DISCOVER 1
 #define DHCP_OFFER 2
+#define DHCP_REQUEST 3
+#define DHCP_ACK 5
 #define BUFFER_SIZE 1024
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67
@@ -30,7 +33,9 @@ struct dhcp_packet {
 
 // Funciones del cliente DHCP
 void send_dhcp_discover(int sockfd, struct sockaddr_in *server_addr);
-void receive_dhcp_offer(int sockfd);
+void receive_dhcp_offer(int sockfd, struct in_addr *offered_ip);
+void send_dhcp_request(int sockfd, struct sockaddr_in *server_addr, struct in_addr *offered_ip); // Nueva función para enviar DHCPREQUEST
+void receive_dhcp_ack(int sockfd); // Nueva función para recibir DHCPACK
 
 // Función que inicia el cliente DHCP
 void start_dhcp_client();

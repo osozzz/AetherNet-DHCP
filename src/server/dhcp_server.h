@@ -34,8 +34,10 @@ struct dhcp_packet {
     uint32_t yiaddr;      // 'Your' (client) IP address
     uint32_t siaddr;      // Server IP address
     uint32_t giaddr;      // Gateway IP address
-    uint8_t chaddr[16];   // Client hardware address (MAC)
-    uint8_t options[312]; // DHCP options (variable length)
+    unsigned char chaddr[16];
+    unsigned char sname[64];
+    unsigned char file[128];
+    unsigned char options[312];
 };
 
 // Prototipos de funciones
@@ -44,5 +46,6 @@ void handle_dhcp_requests(int sockfd);
 void send_dhcp_offer(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range);
 char* assign_ip_address(ip_range_t *ip_range);
 void initialize_ip_range(ip_range_t *ip_range, const char* start_ip, const char* end_ip, int lease_time);
+void send_dhcp_ack(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range);
 
 #endif // DHCP_SERVER_H
