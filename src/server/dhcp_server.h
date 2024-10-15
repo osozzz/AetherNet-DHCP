@@ -42,10 +42,30 @@ struct dhcp_packet {
 
 // Prototipos de funciones
 void init_dhcp_server();
+
+// Función para manejar las solicitudes DHCP
 void handle_dhcp_requests(int sockfd);
+
+// Funciones para enviar respuestas DHCP
 void send_dhcp_offer(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range);
-char* assign_ip_address(ip_range_t *ip_range);
-void initialize_ip_range(ip_range_t *ip_range, const char* start_ip, const char* end_ip, int lease_time);
+void handle_dhcp_request(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range);
 void send_dhcp_ack(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range);
+void send_dhcp_nak(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr);
+
+// Funciones para manejar mensajes adicionales
+void handle_dhcp_decline(int sockfd, struct dhcp_packet *decline_message, ip_range_t *ip_range);
+void handle_dhcp_release(int sockfd, struct dhcp_packet *release_message, ip_range_t *ip_range);
+
+// Función para inicializar el rango de IPs
+void initialize_ip_range(ip_range_t *range, const char *start_ip, const char *end_ip, int lease_time);
+
+// Funciones auxiliares para marcar IPs
+void mark_ip_as_unavailable(ip_range_t *ip_range, uint32_t ip);
+void mark_ip_as_available(ip_range_t *ip_range, uint32_t ip);
+
+// Función para asignar una dirección IP
+char* assign_ip_address(ip_range_t *ip_range);
+// Función para verificar si una IP es válida
+int is_ip_valid(uint32_t ip, ip_range_t *ip_range);
 
 #endif // DHCP_SERVER_H
