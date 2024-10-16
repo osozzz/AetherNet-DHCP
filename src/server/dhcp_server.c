@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <errno.h>
+#include <time.h>
 
 #define DHCP_DISCOVER 1
 #define DHCP_OFFER 2
@@ -61,10 +62,12 @@ void handle_dhcp_requests(int sockfd) {
     struct dhcp_packet *request;
 
     ip_range_t ip_range;
-    initialize_ip_range(&ip_range, "192.168.1.100", "192.168.1.150", 86400); // Rango de IPs y lease time de 24h
+    initialize_ip_range(&ip_range, "192.168.1.100", "192.168.1.150", 20); // Rango de IPs y lease time de 24h
 
     // Bucle infinito para escuchar solicitudes
     while (1) {
+        // Verificar si hay IPs que han expirado
+        check_expired_leases();
         printf("Esperando solicitudes DHCP...\n");
 
         // Recibir un mensaje del cliente
@@ -111,11 +114,54 @@ void send_dhcp_offer(int sockfd, struct dhcp_packet *request, struct sockaddr_in
     // Asignar una dirección IP desde el rango
     char* offered_ip = assign_ip_address(ip_range);
     if (offered_ip == NULL) {
-        printf("No hay más direcciones IP disponibles.\n");
+        printf("\033[1;31mNo hay más direcciones IP disponibles.\033[0m\n");
+        send_dhcp_nak(sockfd, request, client_addr);
         return;
     }
     response.yiaddr = inet_addr(offered_ip); // Dirección IP ofrecida
     printf("Ofreciendo IP: %s\n", offered_ip);
+
+    // Asignar el tiempo de lease
+    for (int i = 0; i < MAX_IPS; i++) {
+        if (strcmp(assigned_ips[i].ip, offered_ip) == 0) {
+            assigned_ips[i].lease_remaining = ip_range->lease_time;
+            assigned_ips[i].lease_start = time(NULL);  // Asignar el tiempo de inicio del lease
+            printf("Lease asignado por %d segundos.\n", ip_range->lease_time);
+            break;
+        }
+    }
+
+    // Opciones DHCP (incluir información adicional como máscara de subred, gateway, etc.)
+    response.options[0] = 53;  // DHCP Message Type
+    response.options[1] = 1;   // Longitud de la opción
+    response.options[2] = 2;   // DHCP Offer
+
+    // Máscara de subred (opción 1)
+    response.options[3] = 1;  // Opción: Máscara de subred
+    response.options[4] = 4;  // Longitud de la opción
+    response.options[5] = 255;
+    response.options[6] = 255;
+    response.options[7] = 255;
+    response.options[8] = 0;  // Máscara: 255.255.255.0
+
+    // Gateway (opción 3)
+    response.options[9] = 3;  // Opción: Gateway
+    response.options[10] = 4;  // Longitud de la opción
+    response.options[11] = 192;
+    response.options[12] = 168;
+    response.options[13] = 1;
+    response.options[14] = 1;  // Gateway: 192.168.1.1
+
+    // Servidor DNS (opción 6)
+    response.options[15] = 6;  // Opción: DNS
+    response.options[16] = 4;  // Longitud de la opción
+    response.options[17] = 8;
+    response.options[18] = 8;
+    response.options[19] = 8;
+    response.options[20] = 8;  // DNS: 8.8.8.8 (Google DNS)
+
+    // Fin de opciones (opción 255)
+    response.options[21] = 255;  // Fin de opciones
 
     // Enviar el mensaje de respuesta
     if (sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
@@ -130,20 +176,34 @@ void initialize_ip_range(ip_range_t *ip_range, const char* start_ip, const char*
     ip_range->start_ip = strdup(start_ip);
     ip_range->end_ip = strdup(end_ip);
     ip_range->lease_time = lease_time;
+
+    // Inicializar el estado de las IPs asignadas
+    int start = 100;  // Empezamos en 192.168.1.100
+
+    for (int i = 0; i < MAX_IPS; i++) {
+        sprintf(assigned_ips[i].ip, "192.168.1.%d", start + i);  // Asignar el IP como cadena
+        assigned_ips[i].available = 1;  // Marcar todas las IPs como disponibles al inicio
+    }
 }
 
 // Función para asignar una dirección IP dinámica del rango
 char* assign_ip_address(ip_range_t *ip_range) {
-    static int next_ip = 100; // Simulando IPs desde 192.168.1.100 a 192.168.1.150
-    char *assigned_ip = (char *)malloc(16);
+    static int next_ip_index = 0;  // Mantener el índice de la próxima IP
+    int original_index = next_ip_index;  // Guardar el índice original para saber si dimos la vuelta completa
 
-    if (next_ip > 150) {
-        return NULL; // No más IPs disponibles
-    }
+    // Buscar una IP disponible en el rango
+    do {
+        if (assigned_ips[next_ip_index].available == 1) {  // Si la IP está disponible
+            assigned_ips[next_ip_index].available = 0;  // Marcarla como no disponible
+            char* assigned_ip = assigned_ips[next_ip_index].ip;  // Obtener la IP
+            next_ip_index = (next_ip_index + 1) % MAX_IPS;  // Avanzar el índice, con vuelta circular
+            return assigned_ip;  // Devolver la IP asignada
+        }
+        next_ip_index = (next_ip_index + 1) % MAX_IPS;  // Avanzar al siguiente índice, con vuelta circular
+    } while (next_ip_index != original_index);  // Continuar hasta dar una vuelta completa
 
-    sprintf(assigned_ip, "192.168.1.%d", next_ip);
-    next_ip++;
-    return assigned_ip;
+    // Si llegamos aquí, no hay IPs disponibles
+    return NULL;  // No se encontró una IP disponible
 }
 
 void send_dhcp_ack(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range) {
@@ -160,17 +220,46 @@ void send_dhcp_ack(int sockfd, struct dhcp_packet *request, struct sockaddr_in *
     // Asignar la dirección IP previamente ofrecida (yiaddr del DHCPOFFER)
     response.yiaddr = request->yiaddr;
 
-    // Configurar las opciones adicionales (máscara de subred, gateway, DNS)
-    response.options[0] = 1; // Máscara de subred
-    response.options[1] = 4; // Longitud de la opción
-    response.options[2] = 5; response.options[3] = 255;
-    response.options[4] = 255; response.options[5] = 255;
-    response.options[6] = 0; // 255.255.255.0
+    // Buscar la IP en el arreglo de IPs y marcarla como no disponible
+    for (int i = 0; i < MAX_IPS; i++) {
+        if (strcmp(assigned_ips[i].ip, inet_ntoa(*(struct in_addr *)&request->yiaddr)) == 0) {
+            assigned_ips[i].available = 0;  // Marcar como no disponible
+            printf("IP %s marcada como no disponible.\n", assigned_ips[i].ip);
+            break;
+        }
+    }
 
-    response.options[7] = 3; // Gateway
-    response.options[8] = 4;
-    response.options[9] = 192; response.options[10] = 168;
-    response.options[11] = 1; response.options[12] = 1; // 192.168.1.1
+    // Opciones DHCP (incluimos la configuración adicional como máscara de subred, gateway, etc.)
+    response.options[0] = 53;  // DHCP Message Type
+    response.options[1] = 1;   // Longitud de la opción
+    response.options[2] = 5;   // DHCP ACK
+
+    // Máscara de subred (opción 1)
+    response.options[3] = 1;  // Opción: Máscara de subred
+    response.options[4] = 4;  // Longitud de la opción
+    response.options[5] = 255;
+    response.options[6] = 255;
+    response.options[7] = 255;
+    response.options[8] = 0;  // Máscara: 255.255.255.0
+
+    // Gateway (opción 3)
+    response.options[9] = 3;  // Opción: Gateway
+    response.options[10] = 4;  // Longitud de la opción
+    response.options[11] = 192;
+    response.options[12] = 168;
+    response.options[13] = 1;
+    response.options[14] = 1;  // Gateway: 192.168.1.1
+
+    // Servidor DNS (opción 6)
+    response.options[15] = 6;  // Opción: DNS
+    response.options[16] = 4;  // Longitud de la opción
+    response.options[17] = 8;
+    response.options[18] = 8;
+    response.options[19] = 8;
+    response.options[20] = 8;  // DNS: 8.8.8.8 (Google DNS)
+
+    // Fin de opciones (opción 255)
+    response.options[21] = 255;  // Fin de opciones
 
     // Enviar el mensaje DHCP ACK
     if (sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
@@ -205,14 +294,22 @@ void send_dhcp_nak(int sockfd, struct dhcp_packet *request, struct sockaddr_in *
 }
 
 void handle_dhcp_request(int sockfd, struct dhcp_packet *request, struct sockaddr_in *client_addr, ip_range_t *ip_range) {
-    // Verificar si la IP solicitada es válida
-    if (!is_ip_valid(request->yiaddr, ip_range)) {
-        // Enviar DHCPNAK si la IP no es válida
-        send_dhcp_nak(sockfd, request, client_addr);
-    } else {
-        // Si es válida, enviar el DHCPACK
-        send_dhcp_ack(sockfd, request, client_addr, ip_range);
+    // Verificar si la IP solicitada es válida y asignada
+    for (int i = 0; i < MAX_IPS; i++) {
+        if (assigned_ips[i].available == 0 && strcmp(assigned_ips[i].ip, inet_ntoa(*(struct in_addr *)&request->yiaddr)) == 0) {
+            // Si la IP está asignada, renovamos el lease
+            assigned_ips[i].lease_remaining = ip_range->lease_time;
+            assigned_ips[i].lease_start = time(NULL);  // Reiniciar el tiempo de lease
+            printf("Lease renovado para la IP %s por %d segundos.\n", assigned_ips[i].ip, ip_range->lease_time);
+            
+            // Enviar DHCPACK
+            send_dhcp_ack(sockfd, request, client_addr, ip_range);
+            return;
+        }
     }
+
+    // Si la IP no es válida o no está asignada, enviar DHCPNAK
+    send_dhcp_nak(sockfd, request, client_addr);
 }
 
 void handle_dhcp_decline(int sockfd, struct dhcp_packet *decline_message, ip_range_t *ip_range) {
@@ -244,14 +341,27 @@ void mark_ip_as_unavailable(ip_range_t *ip_range, uint32_t ip) {
 }
 
 void mark_ip_as_available(ip_range_t *ip_range, uint32_t ip) {
-    // Lógica para marcar la IP como disponible en el rango
-    printf("IP %s marcada como disponible.\n", inet_ntoa(*(struct in_addr *)&ip));
+    // Lógica para marcar la IP como disponible en el arreglo assigned_ips
+    for (int i = 0; i < MAX_IPS; i++) {
+        if (inet_addr(assigned_ips[i].ip) == ip) {  // Comparar la IP
+            assigned_ips[i].available = 1;  // Marcarla como disponible
+            printf("IP %s marcada como disponible.\n", assigned_ips[i].ip);
+            break;
+        }
+    }
 }
 
-int is_ip_valid(uint32_t ip, ip_range_t *ip_range) {
-    // Verificar si la IP está dentro del rango
-    uint32_t start_ip = inet_addr(ip_range->start_ip);
-    uint32_t end_ip = inet_addr(ip_range->end_ip);
+void check_expired_leases() {
+    time_t current_time = time(NULL);  // Obtener el tiempo actual
 
-    return (ip >= start_ip && ip <= end_ip);
+    for (int i = 0; i < MAX_IPS; i++) {
+        if (assigned_ips[i].available == 0) {  // Si la IP está asignada
+            int time_elapsed = difftime(current_time, assigned_ips[i].lease_start);
+            if (time_elapsed >= assigned_ips[i].lease_remaining) {
+                // Si el tiempo de lease ha expirado
+                printf("Lease para la IP %s ha expirado.\n", assigned_ips[i].ip);
+                assigned_ips[i].available = 1;  // Marcar la IP como disponible
+            }
+        }
+    }
 }

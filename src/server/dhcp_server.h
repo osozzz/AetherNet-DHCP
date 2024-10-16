@@ -5,7 +5,7 @@
 
 #define DHCP_SERVER_PORT 67
 #define BUFFER_SIZE 1024
-#define MAX_IPS 50  // Número máximo de direcciones IP que podemos asignar
+#define MAX_IPS 10  // Número máximo de direcciones IP que podemos asignar
 
 // Estructura para manejar el rango de direcciones IP
 typedef struct {
@@ -18,7 +18,9 @@ typedef struct {
 typedef struct {
     char ip[16];        // Dirección IP asignada
     uint8_t mac[6];     // Dirección MAC del cliente
+    time_t lease_start; // Tiempo de concesión
     int lease_remaining; // Tiempo de concesión restante
+    uint8_t available;  // 1 = disponible, 0 = no disponible
 } ip_assignment_t;
 
 // Estructura básica del paquete DHCP (simplificado)
@@ -65,7 +67,8 @@ void mark_ip_as_available(ip_range_t *ip_range, uint32_t ip);
 
 // Función para asignar una dirección IP
 char* assign_ip_address(ip_range_t *ip_range);
-// Función para verificar si una IP es válida
-int is_ip_valid(uint32_t ip, ip_range_t *ip_range);
+
+// Función para liberar una dirección IP
+void check_expired_leases();
 
 #endif // DHCP_SERVER_H

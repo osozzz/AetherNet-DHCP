@@ -5,80 +5,145 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <time.h>
 
 #define DHCP_SERVER_PORT 67
 #define DHCP_CLIENT_PORT 68
+#define RETRY_DELAY 90  // Retardo de reintentos en segundos
+
+int lease_time = 0;
+int t1_time = 0; // Tiempo T1 para renovación
+struct in_addr assigned_ip; // D/irección IP asignada
+int renewed_once = 0;  // Indica si el lease ha sido renovado al menos una vez
+
 
 void start_dhcp_client() {
     int sockfd;
     struct sockaddr_in server_addr, client_addr;
     int broadcastEnable = 1;
     struct in_addr offered_ip;  // Aquí almacenamos la IP ofrecida
+    int retry_count = 0;  // Contador de reintentos
     
-    // Crear socket
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("Error al crear el socket");
-        exit(EXIT_FAILURE);
-    }
-
-     // Habilitar broadcast en el socket
-    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
-        perror("Error al habilitar broadcast");
-        close(sockfd);
-        exit(EXIT_FAILURE);
-    }
-
-    // Configurar dirección del cliente (puerto 68)
-    memset(&client_addr, 0, sizeof(client_addr));
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_port = htons(DHCP_CLIENT_PORT);
-    client_addr.sin_addr.s_addr = INADDR_ANY;
-
-    // Enlazar el socket a la dirección del cliente
-    if (bind(sockfd, (struct sockaddr *)&client_addr, sizeof(client_addr)) < 0) {
-        perror("Error al enlazar el socket");
-        close(sockfd);
-        exit(EXIT_FAILURE);
-    }
-
-    // Configurar dirección del servidor (puerto 67)
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(DHCP_SERVER_PORT);
-    server_addr.sin_addr.s_addr = INADDR_BROADCAST;
-
-    // Enviar mensaje DHCPDISCOVER
-    send_dhcp_discover(sockfd, &server_addr);
-
-    // Recibir respuesta (DHCP Offer)
-    receive_dhcp_offer(sockfd, &offered_ip);
-
-    // Verificar si la IP ofrecida está en uso
-    if (check_ip_conflict(inet_ntoa(offered_ip))) {
-        // Si hay conflicto, enviar DHCPDECLINE
-        printf("IP ofrecida está en uso. Enviando DHCPDECLINE.\n");
-        send_dhcp_decline(sockfd, &offered_ip, &server_addr);
-    } else {
-        printf("IP ofrecida no está en uso. Enviando DHCPREQUEST.\n");
-        // Si no hay conflicto, continuar con DHCPREQUEST
-        send_dhcp_request(sockfd, &server_addr, &offered_ip);
-
-        // Recibir confirmación DHCPACK o DHCPNAK
-        if (receive_dhcp_ack_or_nak(sockfd) == 0) {
-            // Si recibimos DHCPNAK, reiniciar el proceso
-            printf("Reiniciando el proceso DHCP...\n");
-            close(sockfd);  // Cerrar el socket actual
-            start_dhcp_client();  // Volver a iniciar el cliente DHCP
-            return;
+    while (retry_count < 2) {  // Reintentar un máximo de 5 veces
+        // Crear socket
+        sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sockfd < 0) {
+            perror("Error al crear el socket");
+            exit(EXIT_FAILURE);
         }
 
-        // Enviar DHCPRELEASE al finalizar
-        send_dhcp_release(sockfd, &server_addr, &offered_ip);
+        // Habilitar broadcast en el socket
+        if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
+            perror("Error al habilitar broadcast");
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        // Configurar dirección del cliente (puerto 68)
+        memset(&client_addr, 0, sizeof(client_addr));
+        client_addr.sin_family = AF_INET;
+        client_addr.sin_port = 0;
+        client_addr.sin_addr.s_addr = INADDR_ANY;
+
+        // Enlazar el socket a la dirección del cliente
+        if (bind(sockfd, (struct sockaddr *)&client_addr, sizeof(client_addr)) < 0) {
+            perror("Error al enlazar el socket");
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        // Configurar dirección del servidor (puerto 67)
+        memset(&server_addr, 0, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(DHCP_SERVER_PORT);
+        server_addr.sin_addr.s_addr = INADDR_BROADCAST;
+        
+        socklen_t len = sizeof(client_addr);
+        if (getsockname(sockfd, (struct sockaddr *)&client_addr, &len) == -1) {
+            perror("Error obteniendo el puerto asignado");
+        } else {
+            printf("Puerto local dinámico asignado: %d\n", ntohs(client_addr.sin_port));
+        }
+
+        // Enviar mensaje DHCPDISCOVER
+        send_dhcp_discover(sockfd, &server_addr);
+
+        // Recibir respuesta (DHCP Offer)
+        receive_dhcp_offer(sockfd, &offered_ip);
+
+        // Si la IP ofrecida es 0.0.0.0, significa que el cliente recibió un DHCPNAK o no recibió IP
+        if (strcmp(inet_ntoa(offered_ip), "0.0.0.0") == 0) {
+            printf("No se recibió una oferta válida. Reintentando...\n");
+            retry_count++;
+            close(sockfd);  // Cerrar el socket actual
+            sleep(RETRY_DELAY);  // Esperar antes de reintentar
+            continue;  // Volver al inicio del bucle para intentar de nuevo
+        }
+
+        // Verificar si la IP ofrecida está en uso
+        if (check_ip_conflict(inet_ntoa(offered_ip))) {
+            // Si hay conflicto, enviar DHCPDECLINE
+            printf("IP ofrecida está en uso. Enviando DHCPDECLINE.\n");
+            send_dhcp_decline(sockfd, &offered_ip, &server_addr);
+        } else {
+            printf("IP ofrecida no está en uso. Enviando DHCPREQUEST.\n");
+            // Si no hay conflicto, continuar con DHCPREQUEST
+            send_dhcp_request(sockfd, &server_addr, &offered_ip);
+
+            // Recibir confirmación DHCPACK o DHCPNAK
+            if (receive_dhcp_ack_or_nak(sockfd) == 0) {
+                // Si recibimos DHCPNAK, reiniciar el proceso
+                printf("Reiniciando el proceso DHCP...\n");
+                retry_count++;
+                close(sockfd);  // Cerrar el socket actual
+                sleep(RETRY_DELAY);  // Esperar antes de reintentar
+                continue;  // Volver al inicio del bucle para intentar de nuevo
+            }
+
+            // Enviar DHCPRELEASE al finalizar
+            assigned_ip = offered_ip;
+            break;
+            //send_dhcp_release(sockfd, &server_addr, &offered_ip);
+        }
+    }  
+
+    // Iniciar el proceso de renovación del lease si aún no ha sido renovado
+    if (lease_time > 0 && !renewed_once) {
+        printf("Esperando a T1 para renovar el lease...\n");
+        sleep(t1_time);  // Esperar hasta el tiempo T1 para la renovación
+        renew_dhcp_lease(sockfd, &server_addr);  // Intentar renovar la IP
+    }
+
+    // Después de la renovación, liberar la IP
+    if (renewed_once) {
+        printf("Lease renovado una vez, liberando la IP...\n");
+        send_dhcp_release(sockfd, &server_addr, &assigned_ip);  // Enviar DHCPRELEASE
     }
 
     // Cerrar el socket al finalizar
     close(sockfd);
+
+    // Si hemos excedido los reintentos
+    if (retry_count >= 2) {
+        printf("Error: Excedido el número máximo de reintentos.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    exit(0);
+}
+
+void renew_dhcp_lease(int sockfd, struct sockaddr_in *server_addr) {
+    printf("Iniciando renovación de lease...\n");
+    send_dhcp_request(sockfd, server_addr, &assigned_ip);  // Enviar DHCPREQUEST para renovar
+
+    // Recibir confirmación DHCPACK o DHCPNAK
+    if (receive_dhcp_ack_or_nak(sockfd) == 1) {
+        printf("Lease renovado exitosamente.\n");
+        renewed_once = 1;  // Indicar que el lease ha sido renovado al menos una vez
+    } else {
+        printf("Error al renovar el lease. Intentando de nuevo...\n");
+        send_dhcp_request(sockfd, server_addr, &assigned_ip);  // Intentar renovar de nuevo
+    }
 }
 
 void send_dhcp_discover(int sockfd, struct sockaddr_in *server_addr) {
@@ -110,7 +175,7 @@ void send_dhcp_discover(int sockfd, struct sockaddr_in *server_addr) {
     if (send_len < 0) {
         perror("Error al enviar el mensaje DHCPDISCOVER");
     } else {
-        printf("Mensaje DHCPDISCOVER enviado.\n");
+        printf("\033[1;34mMensaje DHCPDISCOVER enviado.\033[0m\n");
     }
 }
 
@@ -124,11 +189,31 @@ void receive_dhcp_offer(int sockfd, struct in_addr *offered_ip) {
                             (struct sockaddr *)&server_addr, &addr_len);
     if (recv_len < 0) {
         perror("Error al recibir el mensaje DHCPOFFER");
-    } else {
-        printf("Mensaje DHCPOFFER recibido.\n");
+        return;
+    }
 
+    // Verificar si el mensaje recibido es un DHCP Offer
+    if (offer_message.options[0] == 53 && offer_message.options[2] == DHCP_OFFER) {
+        // Es un DHCP Offer
+        printf("\033[1;32mMensaje DHCPOFFER recibido.\033[0m\n");
         offered_ip->s_addr = offer_message.yiaddr;  // Asignamos el valor de yiaddr a la estructura in_addr
         printf("Dirección IP ofrecida: %s\n", inet_ntoa(*offered_ip));  // Imprimir la dirección IP ofrecida
+        // Obtener la duración del lease (opción 51)
+        for (int i = 0; i < sizeof(offer_message.options); i++) {
+            if (offer_message.options[i] == 51) {  // Opción de tiempo de lease
+                lease_time = ntohl(*(uint32_t*)&offer_message.options[i + 2]);
+                printf("Tiempo de lease recibido: %d segundos\n", lease_time);
+                t1_time = lease_time / 2;  // T1 es la mitad del tiempo de lease
+                break;
+            }
+        }
+    } else if (offer_message.options[0] == 53 && offer_message.options[2] == DHCP_NAK) {
+        // Si es un DHCP NAK, no se asigna una IP
+        printf("\033[1;33mMensaje DHCPNAK recibido. La solicitud fue rechazada.\033[0m\n");
+        offered_ip->s_addr = inet_addr("0.0.0.0");  // Indicar que no se recibió una IP válida
+    } else {
+        // Mensaje desconocido
+        printf("Mensaje desconocido recibido. No es DHCP Offer ni DHCP NAK.\n");
     }
 }
 
@@ -154,11 +239,11 @@ int receive_dhcp_ack_or_nak(int sockfd) {
 
     // Comprobar si es DHCPACK o DHCPNAK
     if (response_message.options[2] == DHCP_ACK) {
-        printf("Mensaje DHCPACK recibido.\n");
+        printf("\033[1;35mMensaje DHCPACK recibido.\033[0m\n");
         printf("Dirección IP asignada: %s\n", inet_ntoa(*(struct in_addr *)&response_message.yiaddr));
         return 1;  // Indica que se recibió DHCPACK
     } else if (response_message.options[2] == DHCP_NAK) {
-        printf("Mensaje DHCPNAK recibido. La solicitud fue rechazada.\n");
+        printf("\033[1;33mMensaje DHCPNAK recibido. La solicitud fue rechazada.\033[0m\n");
         return 0;  // Indica que se recibió DHCPNAK
     } else {
         printf("Mensaje desconocido recibido. No es DHCPACK ni DHCPNAK.\n");
@@ -189,7 +274,7 @@ void send_dhcp_decline(int sockfd, struct in_addr *offered_ip, struct sockaddr_i
     if (sendto(sockfd, &decline_message, sizeof(decline_message), 0, (struct sockaddr *)server_addr, sizeof(*server_addr)) < 0) {
         perror("Error al enviar el mensaje DHCPDECLINE");
     } else {
-        printf("Mensaje DHCPDECLINE enviado.\n");
+        printf("\033[0;33mMensaje DHCPDECLINE enviado.\033[0m\n");
     }
 }
 
@@ -225,7 +310,7 @@ void send_dhcp_request(int sockfd, struct sockaddr_in *server_addr, struct in_ad
     if (send_len < 0) {
         perror("Error al enviar el mensaje DHCPREQUEST");
     } else {
-        printf("Mensaje DHCPREQUEST enviado.\n");
+        printf("\033[1;36mMensaje DHCPREQUEST enviado.\033[0m\n");
     }
 }
 
@@ -240,7 +325,7 @@ void receive_dhcp_ack(int sockfd) {
     if (recv_len < 0) {
         perror("Error al recibir el mensaje DHCPACK");
     } else {
-        printf("Mensaje DHCPACK recibido.\n");
+        printf("\033[1;35mMensaje DHCPACK recibido.\033[0m\n");
         printf("Dirección IP asignada: %s\n", inet_ntoa(*(struct in_addr *)&ack_message.yiaddr));
     }
 }
@@ -266,6 +351,6 @@ void send_dhcp_release(int sockfd, struct sockaddr_in *server_addr, struct in_ad
     if (sendto(sockfd, &release_message, sizeof(release_message), 0, (struct sockaddr *)server_addr, sizeof(*server_addr)) < 0) {
         perror("Error al enviar el mensaje DHCPRELEASE");
     } else {
-        printf("Mensaje DHCPRELEASE enviado.\n");
+        printf("\033[1;32mMensaje DHCPRELEASE enviado.\033[0m\n");
     }
 }

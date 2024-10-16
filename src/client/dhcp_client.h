@@ -41,6 +41,8 @@ int receive_dhcp_ack_or_nak(int sockfd);  // Nueva función para manejar DHCPACK
 void send_dhcp_request(int sockfd, struct sockaddr_in *server_addr, struct in_addr *offered_ip);
 void send_dhcp_decline(int sockfd, struct in_addr *offered_ip, struct sockaddr_in *server_addr);  // Manejo de DHCPDECLINE
 void send_dhcp_release(int sockfd, struct sockaddr_in *server_addr, struct in_addr *assigned_ip);  // Manejo de DHCPRELEASE
+void renew_dhcp_lease(int sockfd, struct sockaddr_in *server_addr);  // Renovar la concesión DHCP
+void receive_dhcp_ack(int sockfd);  // Recibir DHCPACK
 
 // Función que inicia el cliente DHCP
 void start_dhcp_client();
