@@ -35,7 +35,7 @@ SERVER_PID=$!
 echo "============================================="
 # 3. Prueba de agotamiento de direcciones IP
 echo "Prueba 3: Agotamiento de direcciones IP..."
-for i in {1..12}  # Asumiendo que el servidor tiene un límite de 50 IPs
+for i in {1..55}  # Asumiendo que el servidor tiene un límite de 50 IPs
 do
     echo "Cliente $i solicitando IP..."
     ../src/client/dhcp_client &

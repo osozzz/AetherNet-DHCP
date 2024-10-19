@@ -23,6 +23,14 @@ typedef struct {
     uint8_t available;  // 1 = disponible, 0 = no disponible
 } ip_assignment_t;
 
+typedef struct {
+    int sockfd;
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len;
+    char *buffer;
+} client_request_args_t;
+
+
 // Estructura básica del paquete DHCP (simplificado)
 struct dhcp_packet {
     uint8_t op;           // Message type
@@ -70,5 +78,15 @@ char* assign_ip_address(ip_range_t *ip_range);
 
 // Función para liberar una dirección IP
 void check_expired_leases();
+
+
+// Funciones para manejar las solicitudes DHCP en un hilo
+void* handle_dhcp_request_thread(void* arg);
+
+void* dhcp_handler(void* arg);
+
+void shutdown_dhcp_server();
+
+void *handle_client_request(void *args);
 
 #endif // DHCP_SERVER_H

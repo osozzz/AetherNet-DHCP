@@ -13,7 +13,7 @@
 
 int lease_time = 0;
 int t1_time = 0; // Tiempo T1 para renovación
-struct in_addr assigned_ip; // D/irección IP asignada
+struct in_addr assigned_ip; // Dirección IP asignada
 int renewed_once = 0;  // Indica si el lease ha sido renovado al menos una vez
 
 
