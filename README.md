@@ -1,6 +1,6 @@
-# Wiki del Proyecto AetherNet DHCP
+# Readme del Proyecto AetherNet DHCP
 
-¡Bienvenido al Proyecto AetherNet DHCP! Esta wiki sirve como una guía integral para entender el diseño, desarrollo y funcionalidad del servidor y cliente DHCP de AetherNet. A continuación, se presentan las diferentes secciones de la documentación del proyecto.
+¡Bienvenido al Proyecto AetherNet DHCP! Este Readme sirve como una guía integral para entender el diseño, desarrollo y funcionalidad del servidor y cliente DHCP de AetherNet. A continuación, se presentan las diferentes secciones de la documentación del proyecto.
 
 ---
 
