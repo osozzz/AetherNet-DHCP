@@ -1,19 +1,31 @@
 #ifndef DHCP_CLIENT_H
 #define DHCP_CLIENT_H
 
-#include <arpa/inet.h>
-#include <stdint.h>  // Para los tipos de datos uint8_t, uint32_t, etc.
+#include <arpa/inet.h>  // Para inet_ntop
+#include <sys/socket.h> // Para sockets
+#include <netinet/in.h> // Para sockaddr_in
+#include <unistd.h>     // Para close
+#include <pthread.h>    // Para hilos
+#include <time.h>       // Para time
+#include <string.h>     // Para memset
+#include <errno.h>      // Para errno
+#include <stdio.h>      // Para printf
+#include <stdlib.h>     // Para malloc, free
+#include <signal.h>     // Para signal
+#include <stdint.h>     // Para uint8_t, uint16_t, uint32_t
+#include <sys/time.h>   // Para timeval
+#include <time.h>
 
-#define DHCP_DISCOVER 1
-#define DHCP_OFFER 2
-#define DHCP_REQUEST 3
-#define DHCP_DECLINE 4
-#define DHCP_ACK 5
-#define DHCP_NAK 6
-#define DHCP_RELEASE 7
-#define BUFFER_SIZE 1024
-#define DHCP_CLIENT_PORT 68
-#define DHCP_SERVER_PORT 67
+// Tipos de mensajes DHCP
+typedef enum {
+    DHCP_DISCOVER = 1,
+    DHCP_OFFER,
+    DHCP_REQUEST,
+    DHCP_DECLINE,
+    DHCP_ACK,
+    DHCP_NAK,
+    DHCP_RELEASE
+} dhcp_message_type_t;
 
 // Estructura simplificada del paquete DHCP
 struct dhcp_packet {
@@ -32,21 +44,43 @@ struct dhcp_packet {
     uint8_t sname[64];    // Nombre del servidor DHCP (opcional)
     uint8_t file[128];    // Archivo de arranque (opcional)
     uint8_t options[312]; // Opciones DHCP (53 para tipo de mensaje)
-};
+} __attribute__((packed));
 
-// Funciones del cliente DHCP
-void send_dhcp_discover(int sockfd, struct sockaddr_in *server_addr);
-void receive_dhcp_offer(int sockfd, struct in_addr *offered_ip);
-int receive_dhcp_ack_or_nak(int sockfd);  // Nueva función para manejar DHCPACK o DHCPNAK
-void send_dhcp_request(int sockfd, struct sockaddr_in *server_addr, struct in_addr *offered_ip);
-void send_dhcp_decline(int sockfd, struct in_addr *offered_ip, struct sockaddr_in *server_addr);  // Manejo de DHCPDECLINE
-void send_dhcp_release(int sockfd, struct sockaddr_in *server_addr, struct in_addr *assigned_ip);  // Manejo de DHCPRELEASE
-void renew_dhcp_lease(int sockfd, struct sockaddr_in *server_addr);  // Renovar la concesión DHCP
-void receive_dhcp_ack(int sockfd);  // Recibir DHCPACK
+// Estructura para manejar el cliente DHCP, incluyendo el control del lease
+typedef struct dhcp_client {
+    int sockfd;               // Socket del cliente
+    uint32_t lease_time;       // Tiempo de concesión del lease
+    uint32_t renewal_time;     // Tiempo para enviar la renovación (T1)
+    uint32_t rebind_time;      // Tiempo para rebind (T2)
+    int nak_attempts;          // Contador de reintentos de NAK
+    int decline_attempts;      // Contador de reintentos de DECLINE
+    struct in_addr offered_ip; // IP ofrecida por el servidor
+    struct in_addr server_ip;  // IP del servidor DHCP
+    struct sockaddr_in server_addr;  // Dirección completa del servidor (sockaddr_in)
+    struct in_addr subnet_mask;  // Máscara de subred
+    struct in_addr network_ip;   // IP de red base
+    uint8_t mac_addr[6];
+} dhcp_client_t;
 
-// Función que inicia el cliente DHCP
-void start_dhcp_client();
+// Funciones públicas (declaraciones)
+void init_dhcp_client();  // Función que inicializa el cliente DHCP
 
-// Función para verificar conflictos de IP
-int check_ip_conflict(const char *ip_address);  // Nueva función para manejar el conflicto de IP (ping)
-#endif
+void handle_dhcp_protocol(dhcp_client_t* client, struct sockaddr_in* server_addr);  // Manejo del ciclo DHCP
+
+void handle_dhcp_offer(dhcp_client_t* client, struct dhcp_packet* offer_packet);  // Procesar la oferta DHCP
+void handle_dhcp_ack(dhcp_client_t* client, struct dhcp_packet* ack_packet);      // Procesar el ACK
+void handle_dhcp_nak(dhcp_client_t* client);                                     // Procesar el NAK
+
+void send_dhcp_discover(int sockfd, struct sockaddr_in* server_add, uint8_t* mac_addr);            // Enviar DHCPDISCOVER
+void send_dhcp_request(int sockfd, struct sockaddr_in* server_addr, struct in_addr* offered_ip, uint8_t* mac_addr); // Enviar DHCPREQUEST
+void send_dhcp_decline(int sockfd, struct in_addr* offered_ip, struct sockaddr_in* server_addr, uint8_t* mac_addr);  // Enviar DHCPDECLINE
+
+int validate_offered_ip(struct in_addr* offered_ip, struct in_addr* subnet_mask, struct in_addr* network_ip); // Validar la IP ofrecida
+void handle_lease_renewal(dhcp_client_t* client);  // Manejo de la renovación del lease
+
+// Funciones auxiliares para agregar y buscar opciones DHCP
+void add_dhcp_option(struct dhcp_packet* packet, uint8_t* options, int num_options);
+uint8_t* find_dhcp_option(uint8_t* options, uint8_t code);
+void generate_random_mac(uint8_t* mac_addr);
+
+#endif  // DHCP_CLIENT_H
