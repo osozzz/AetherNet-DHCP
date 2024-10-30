@@ -142,7 +142,7 @@ void handle_dhcp_protocol(int sockfd) {
             continue;
         }
 
-        // Verificar si ya existe un hilo manejando este cliente (por xid o chaddr)
+        // Verificar si ya existe un hilo manejando este cliente (chaddr)
         client_thread_info_t* existing_thread = find_client_thread(request->chaddr);
 
         if (existing_thread != NULL) {
@@ -150,11 +150,24 @@ void handle_dhcp_protocol(int sockfd) {
                    request->chaddr[0], request->chaddr[1], request->chaddr[2],
                    request->chaddr[3], request->chaddr[4], request->chaddr[5]);
 
+            // Configurar la estructura del mensaje DHCP antes de enviarlo
+            dhcp_message_t msg;
+            msg.mtype = 1;  // Puedes usar cualquier identificador válido para el tipo de mensaje
+            memcpy(msg.buffer, request, message);  // Copiar los datos DHCP al buffer
+            printf("Se copia bien los datos DHCP al buffer\n");
+            msg.length = sizeof(msg.buffer);  // Establecer el tamaño real del mensaje recibido
+
             // Enviar el mensaje a la cola del hilo correspondiente
-            if (msgsnd(existing_thread->client_info->message_queue_id, &message, sizeof(message) - sizeof(long), 0) == -1) {
+            if (msgsnd(existing_thread->client_info->message_queue_id, (void * ) &msg, msg.length, 0) == -1) {
                 perror("Error al enviar mensaje a la cola del hilo del cliente");
+                // Agregar mensaje de error para seguimiento
+                fprintf(stderr, "Error al enviar el mensaje de cliente MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    request->chaddr[0], request->chaddr[1], request->chaddr[2],
+                    request->chaddr[3], request->chaddr[4], request->chaddr[5]);
+                continue;
             }
-            continue;  // Saltar la creación de un nuevo hilo
+            printf("Enviado correctamente a la cola del hilo del cliente\n");
+            continue;
         }
 
         // Validar si es un paquete DISCOVER (opción 53, tipo de mensaje DHCP)
@@ -186,6 +199,8 @@ void handle_dhcp_protocol(int sockfd) {
                 continue;
             }
 
+            memcpy(&client_info->initial_request, request, sizeof(struct dhcp_packet));  // Copiar el paquete inicial
+
             // Crear un hilo para manejar el cliente
             pthread_t thread_id;
             if (pthread_create(&thread_id, NULL, client_handler, (void*)client_info) != 0) {
@@ -194,6 +209,8 @@ void handle_dhcp_protocol(int sockfd) {
                 continue;
             }
 
+            // Agregar el hilo a la lista de hilos de clientes
+            add_client_thread(request->chaddr, thread_id, client_info);
             // Detach del hilo para que se libere automáticamente cuando termine
             pthread_detach(thread_id);
         } else {
@@ -208,27 +225,31 @@ void* client_handler(void* client_info) {
     int sockfd = info->client_socket;
     struct dhcp_packet request;
     dhcp_message_t msg;
+    long msgtyp = 0;
 
     // Imprimir el ID del hilo con el color asignado
     printf("%sID del hilo: %p asignado al cliente %d\n%s", info->color, (void*)pthread_self(), info->client_id, reset_color);
 
     // Manejo inicial: procesar el DHCP DISCOVER recibido
     printf("Procesando DHCP DISCOVER inicial del cliente.\n");
-    handle_dhcp_discover(sockfd, &client_addr, &request);  // Procesar DISCOVER
+    handle_dhcp_discover(sockfd, &client_addr, &info->initial_request);  // Procesar DISCOVER
 
     int ack_sent = 0;  // Bandera para verificar si se ha enviado un ACK
     int done = 0;      // Bandera para finalizar el ciclo del cliente
     
-    while (!done) {
+    while (done < 1) {
         // Recibir un mensaje de la cola (bloquea hasta recibir una solicitud)
-        if (msgrcv(info->message_queue_id, &msg, sizeof(dhcp_message_t) - sizeof(long), 0, 0) == -1) {
-            perror("Error al recibir mensaje de la cola");
+        if (msgrcv(info->message_queue_id, (void *) &msg, sizeof(msg.buffer), msgtyp, MSG_NOERROR | IPC_NOWAIT) == -1) {
+            continue;
+        }
+        // Verificar que el tamaño del mensaje sea válido
+        if (sizeof(msg.buffer) > BUFFER_SIZE) {
+            fprintf(stderr, "Error: Tamaño del mensaje excede el tamaño del paquete DHCP (%u bytes).\n", BUFFER_SIZE);
             continue;
         }
 
         // Copiar el contenido del mensaje en el paquete DHCP
-        memcpy(&request, msg.buffer, msg.length);
-
+        memcpy(&request, msg.buffer, sizeof(msg.buffer));
         // Validar el tipo de solicitud DHCP (opción 53) y procesar según el tipo
         uint8_t* message_type = find_dhcp_option(request.options, 53);
         if (message_type) {
@@ -258,7 +279,7 @@ void* client_handler(void* client_info) {
                     break;
 
                 case DHCP_DECLINE:
-                    printf("%sSolicitud DHCP DECLINE recibida. Cerrando conexión.\n", info->color);
+                    printf("Solicitud DHCP DECLINE recibida. Cerrando conexión.\n");
                     handle_dhcp_decline(sockfd, &client_addr, &request);
                     done = 1;  // Terminar el ciclo
                     break;
@@ -280,7 +301,9 @@ void* client_handler(void* client_info) {
 
     // Eliminar la cola de mensajes del cliente y liberar la memoria
     msgctl(info->message_queue_id, IPC_RMID, NULL);
+    printf("%sCliente %d desconectado. Cerrando hilo...\n%s", info->color, info->client_id, reset_color);
     free(client_info);  // Liberar la memoria del cliente
+    pthread_exit(NULL);  // Terminar el hilo correctamente
     return NULL;  // Terminar el hilo correctamente
 }
 
@@ -317,7 +340,6 @@ void handle_dhcp_discover(int sockfd, struct sockaddr_in* client_addr, struct dh
         printf("Error: El paquete no es un DISCOVER.\n");
         return;
     }
-    printf("Hasta aqui llego");
     // Asignar una dirección IP al cliente
     uint32_t assigned_ip = assign_ip_address(&global_ip_range, request);  // Usa el rango global de IPs
     if (assigned_ip == 0) {
@@ -752,6 +774,7 @@ ip_assignment_node_t* check_expired_leases(ip_assignment_node_t* root) {
 }
 
 ip_assignment_node_t* find_ip_assignment(ip_assignment_node_t* root, uint32_t ip) {
+    pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear antes de retornar
     pthread_mutex_lock(&ip_assignment_mutex);  // Bloquear acceso al árbol de asignaciones
     
     while (root != NULL) {
@@ -886,22 +909,29 @@ uint8_t* find_dhcp_option(uint8_t* options, uint8_t code) {
     while (i < 312) {  // Longitud fija del array de opciones
         uint8_t option_code = options[i];  // Código de la opción actual
 
+        // Depuración: imprimir el código y longitud de la opción actual
+        printf("Examining option code: %d, expected: %d\n", option_code, code);
+
         // Si encontramos el código de fin (255), detener la búsqueda
         if (option_code == 255) {
+            printf("End of options reached.\n");
             break;
         }
 
         // Si encontramos el código de opción deseado, devolver un puntero al valor de la opción
         if (option_code == code) {
+            printf("Option %d found, returning value.\n", code);
             return &options[i + 2];  // Retornar el puntero al valor (i + 2 salta código y longitud)
         }
 
         // Si no es la opción deseada, avanzar a la siguiente (código + longitud + valor)
         uint8_t option_length = options[i + 1];  // Longitud de la opción
+        printf("Skipping option %d with length %d.\n", option_code, option_length);
         i += 2 + option_length;  // Avanzar al siguiente código de opción
     }
 
     // Si no se encuentra la opción, devolver NULL
+    printf("Option %d not found.\n", code);
     return NULL;
 }
 
@@ -973,7 +1003,7 @@ client_thread_info_t* find_client_thread(uint8_t* chaddr) {
 }
 
 // Añadir un cliente nuevo a la tabla hash
-void add_client_thread(uint32_t xid, uint8_t* chaddr, pthread_t thread_id, client_info_t* client_info) {
+void add_client_thread(uint8_t* chaddr, pthread_t thread_id, client_info_t* client_info) {
     // Calcular el índice hash usando la dirección MAC del cliente
     unsigned int hash = hash_mac(chaddr);
 
@@ -984,7 +1014,6 @@ void add_client_thread(uint32_t xid, uint8_t* chaddr, pthread_t thread_id, clien
         return;
     }
 
-    new_entry->xid = xid;
     memcpy(new_entry->chaddr, chaddr, 6);  // Copiar la dirección MAC
     new_entry->thread_id = thread_id;
     new_entry->client_info = client_info;

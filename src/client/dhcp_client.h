@@ -67,19 +67,19 @@ void init_dhcp_client();  // Función que inicializa el cliente DHCP
 
 void handle_dhcp_protocol(dhcp_client_t* client, struct sockaddr_in* server_addr);  // Manejo del ciclo DHCP
 
-void handle_dhcp_offer(dhcp_client_t* client, struct dhcp_packet* offer_packet);  // Procesar la oferta DHCP
-void handle_dhcp_ack(dhcp_client_t* client, struct dhcp_packet* ack_packet);      // Procesar el ACK
+void handle_dhcp_offer(dhcp_client_t* client, struct sockaddr_in* server_addr, struct dhcp_packet* offer_packet);  // Procesar la oferta DHCP
+void handle_dhcp_ack(dhcp_client_t* client, struct dhcp_packet* ack_packet, struct sockaddr_in* server_addr);      // Procesar el ACK
 void handle_dhcp_nak(dhcp_client_t* client);                                     // Procesar el NAK
 
 void send_dhcp_discover(int sockfd, struct sockaddr_in* server_add, uint8_t* mac_addr);            // Enviar DHCPDISCOVER
 void send_dhcp_request(int sockfd, struct sockaddr_in* server_addr, struct in_addr* offered_ip, uint8_t* mac_addr); // Enviar DHCPREQUEST
 void send_dhcp_decline(int sockfd, struct in_addr* offered_ip, struct sockaddr_in* server_addr, uint8_t* mac_addr);  // Enviar DHCPDECLINE
+void send_dhcp_release(dhcp_client_t* client, struct sockaddr_in* server_addr, struct in_addr* offered_ip);  // Enviar DHCPRELEASE
 
 int validate_offered_ip(struct in_addr* offered_ip, struct in_addr* subnet_mask, struct in_addr* network_ip); // Validar la IP ofrecida
-void handle_lease_renewal(dhcp_client_t* client);  // Manejo de la renovación del lease
+void handle_lease_renewal(dhcp_client_t* client, struct sockaddr_in* server_addr, struct in_addr* offered_ip);  // Manejo de la renovación del lease
 
 // Funciones auxiliares para agregar y buscar opciones DHCP
-void add_dhcp_option(struct dhcp_packet* packet, uint8_t* options, int num_options);
 uint8_t* find_dhcp_option(uint8_t* options, uint8_t code);
 void generate_random_mac(uint8_t* mac_addr);
 

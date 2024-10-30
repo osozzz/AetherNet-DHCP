@@ -20,7 +20,7 @@
 
 // Definiciones del servidor
 #define DHCP_SERVER_PORT 67
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 548
 #define MAX_IPS 10
 #define HASH_TABLE_SIZE 256
 
@@ -35,6 +35,25 @@ typedef enum {
     DHCP_RELEASE
 } dhcp_message_type_t;
 
+// Estructura que representa un paquete DHCP
+struct dhcp_packet {
+    uint8_t op;           // Tipo de mensaje (1 = solicitud)
+    uint8_t htype;        // Tipo de hardware (1 = Ethernet)
+    uint8_t hlen;         // Longitud de la dirección MAC
+    uint8_t hops;         // Número de saltos (0)
+    uint32_t xid;         // ID de transacción (único por cliente)
+    uint16_t secs;        // Segundos transcurridos (0 en DISCOVER)
+    uint16_t flags;       // Banderas
+    uint32_t ciaddr;      // Dirección IP del cliente (0 en DISCOVER)
+    uint32_t yiaddr;      // Dirección IP ofrecida por el servidor
+    uint32_t siaddr;      // Dirección IP del servidor DHCP
+    uint32_t giaddr;      // Dirección del gateway o relay
+    uint8_t chaddr[16];   // Dirección MAC del cliente
+    uint8_t sname[64];    // Nombre del servidor DHCP (opcional)
+    uint8_t file[128];    // Archivo de arranque (opcional)
+    uint8_t options[312]; // Opciones DHCP (53 para tipo de mensaje)
+} __attribute__((packed));
+
 // Estructura para manejar la información de un cliente
 typedef struct {
     int client_socket;
@@ -42,11 +61,11 @@ typedef struct {
     const char* color;
     int client_id;  // Identificador del cliente
     int message_queue_id;
+    struct dhcp_packet initial_request;  // Nuevo campo para el paquete inicial DISCOVER
 } client_info_t;
 
 // Estructura para almacenar los hilos activos
 typedef struct client_thread_info {
-    uint32_t xid;            // ID de transacción del cliente
     uint8_t chaddr[6];       // Dirección MAC del cliente
     pthread_t thread_id;     // ID del hilo que maneja al cliente
     client_info_t* client_info; // Información del cliente asociada al hilo
@@ -71,25 +90,6 @@ typedef struct ip_assignment_node {
     struct ip_assignment_node* left;  // Nodo izquierdo (IP menor)
     struct ip_assignment_node* right; // Nodo derecho (IP mayor)
 } ip_assignment_node_t;
-
-// Estructura que representa un paquete DHCP
-struct dhcp_packet {
-    uint8_t op;           // Tipo de mensaje (1 = solicitud)
-    uint8_t htype;        // Tipo de hardware (1 = Ethernet)
-    uint8_t hlen;         // Longitud de la dirección MAC
-    uint8_t hops;         // Número de saltos (0)
-    uint32_t xid;         // ID de transacción (único por cliente)
-    uint16_t secs;        // Segundos transcurridos (0 en DISCOVER)
-    uint16_t flags;       // Banderas
-    uint32_t ciaddr;      // Dirección IP del cliente (0 en DISCOVER)
-    uint32_t yiaddr;      // Dirección IP ofrecida por el servidor
-    uint32_t siaddr;      // Dirección IP del servidor DHCP
-    uint32_t giaddr;      // Dirección del gateway o relay
-    uint8_t chaddr[16];   // Dirección MAC del cliente
-    uint8_t sname[64];    // Nombre del servidor DHCP (opcional)
-    uint8_t file[128];    // Archivo de arranque (opcional)
-    uint8_t options[312]; // Opciones DHCP (53 para tipo de mensaje)
-} __attribute__((packed));
 
 // Estructura para el mensaje de la cola de mensajes
 typedef struct dhcp_message {
@@ -209,7 +209,7 @@ void cleanup();
 client_thread_info_t* find_client_thread(uint8_t* chaddr);
 
 // Función para agregar un cliente a la lista de clientes
-void add_client_thread(uint32_t xid, uint8_t* chaddr, pthread_t thread_id, client_info_t* client_info);
+void add_client_thread(uint8_t* chaddr, pthread_t thread_id, client_info_t* client_info);
 
 // Función para eliminar un cliente de la lista de clientes
 void remove_client_thread(uint8_t* chaddr);
