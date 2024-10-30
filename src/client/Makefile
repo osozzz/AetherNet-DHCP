@@ -1,20 +1,20 @@
+# Definir el compilador
 CC = gcc
 CFLAGS = -Wall -g
 
-CLIENT_OBJS = dhcp_client.o
-MAIN_OBJS = main.o
+# Archivos fuente y ejecutable
+SOURCES = dhcp_client.c main.c
 TARGET = dhcp_client
 
+# Regla por defecto
 all: $(TARGET)
 
-$(TARGET): $(CLIENT_OBJS) $(MAIN_OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(CLIENT_OBJS) $(MAIN_OBJS)
+# Compilación del ejecutable y eliminación de objetos
+$(TARGET): $(SOURCES)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES)
+	@echo "Eliminando archivos objeto..."
+	@rm -f *.o
 
-dhcp_client.o: dhcp_client.c dhcp_client.h
-	$(CC) $(CFLAGS) -c dhcp_client.c -o dhcp_client.o
-
-main.o: main.c dhcp_client.h
-	$(CC) $(CFLAGS) -c main.c -o main.o
-
+# Limpiar archivos objeto y ejecutable
 clean:
-	rm -f $(TARGET) $(CLIENT_OBJS) $(MAIN_OBJS)
+	rm -f *.o $(TARGET)

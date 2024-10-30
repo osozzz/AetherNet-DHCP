@@ -1,20 +1,20 @@
+# Definir el compilador
 CC = gcc
 CFLAGS = -Wall -g
 
-CLIENT_OBJS = dhcp_relay.o
-MAIN_OBJS = main.o
+# Archivos fuente y ejecutable
+SOURCES = dhcp_relay.c main.c
 TARGET = dhcp_relay
 
+# Regla por defecto
 all: $(TARGET)
 
-$(TARGET): $(CLIENT_OBJS) $(MAIN_OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(CLIENT_OBJS) $(MAIN_OBJS)
+# Compilación del ejecutable y eliminación de objetos
+$(TARGET): $(SOURCES)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES)
+	@echo "Eliminando archivos objeto..."
+	@rm -f *.o
 
-dhcp_client.o: dhcp_relay.c dhcp_relay.h
-	$(CC) $(CFLAGS) -c dhcp_relay.c -o dhcp_relay.o
-
-main.o: main.c dhcp_relay.h
-	$(CC) $(CFLAGS) -c main.c -o main.o
-
+# Limpiar archivos objeto y ejecutable
 clean:
-	rm -f $(TARGET) $(CLIENT_OBJS) $(MAIN_OBJS)
+	rm -f *.o $(TARGET)

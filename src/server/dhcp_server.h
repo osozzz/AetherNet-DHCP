@@ -21,7 +21,7 @@
 // Definiciones del servidor
 #define DHCP_SERVER_PORT 67
 #define BUFFER_SIZE 548
-#define MAX_IPS 10
+#define MAX_IPS 2
 #define HASH_TABLE_SIZE 256
 
 // Estructuras de datos

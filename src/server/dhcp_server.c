@@ -11,6 +11,7 @@ uint32_t gateway_ip;
 uint32_t dns_server_ip;
 uint32_t server_ip;
 const char* dhcp_server_ip = "172.19.2.228";  // IP del servidor DHCP
+static uint32_t last_assigned_ip = 0;
 
 const char* colors[] = {
     "\033[31m", // Rojo
@@ -255,14 +256,14 @@ void* client_handler(void* client_info) {
         if (message_type) {
             switch (*message_type) {
                 case DHCP_DISCOVER:
-                    printf("%sSolicitud DHCP DISCOVER recibida nuevamente.\n", info->color);
+                    printf("Solicitud DHCP DISCOVER recibida nuevamente.\n");
                     handle_dhcp_discover(sockfd, &client_addr, &request);
                     break;
 
                 case DHCP_REQUEST:
                     if (ack_sent) {
                         // El cliente está solicitando renovar su lease
-                        printf("%sSolicitud DHCP REQUEST de renovación recibida. Renovando lease.\n", info->color);
+                        printf("Solicitud DHCP REQUEST de renovación recibida. Renovando lease.\n");
                         uint32_t requested_ip = ntohl(request.ciaddr);  // IP solicitada
                         ip_assignment_node_t* assignment = find_ip_assignment(ip_assignment_root, requested_ip);
                         if (assignment != NULL && memcmp(assignment->mac, request.chaddr, 6) == 0) {
@@ -272,7 +273,7 @@ void* client_handler(void* client_info) {
                             printf("Error: No se pudo renovar el lease para la IP %s\n", int_to_ip(requested_ip));
                         }
                     } else {
-                        printf("%sSolicitud DHCP REQUEST recibida.\n", info->color);
+                        printf("Solicitud DHCP REQUEST recibida.\n");
                         handle_dhcp_request(sockfd, &client_addr, &request);
                         ack_sent = 1;  // Se ha enviado un ACK inicial
                     }
@@ -285,17 +286,17 @@ void* client_handler(void* client_info) {
                     break;
 
                 case DHCP_RELEASE:
-                    printf("%sSolicitud DHCP RELEASE recibida. Cerrando conexión.\n", info->color);
+                    printf("Solicitud DHCP RELEASE recibida. Cerrando conexión.\n");
                     handle_dhcp_release(sockfd, &client_addr, &request);
                     done = 1;  // Terminar el ciclo
                     break;
 
                 default:
-                    printf("%sSolicitud DHCP no reconocida.\n", info->color);
+                    printf("Solicitud DHCP no reconocida.\n");
                     break;
             }
         } else {
-            printf("%sSolicitud DHCP sin tipo válido.\n", info->color);
+            printf("Solicitud DHCP sin tipo válido.\n");
         }
     }
 
@@ -347,6 +348,7 @@ void handle_dhcp_discover(int sockfd, struct sockaddr_in* client_addr, struct dh
         printf("No se pudo asignar una dirección IP para el cliente con MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                request->chaddr[0], request->chaddr[1], request->chaddr[2],
                request->chaddr[3], request->chaddr[4], request->chaddr[5]);
+        send_dhcp_nack(sockfd, client_addr, request);
         return;
     }
 
@@ -567,8 +569,8 @@ void send_dhcp_nak(int sockfd, struct sockaddr_in* client_addr, struct dhcp_pack
     }
 }
 
-void initialize_ip_pool(ip_range_t* range, const char* start_ip, const char* end_ip, int pool_id) {
-    // Convertir las IPs de cadena a enteros (IPv4)
+void initialize_ip_pool(ip_range_t* range, const char* start_ip, const char* end_ip, int pool_id) { 
+    // Convertir las IPs de cadena a enteros (IPv4) 
     range->start_ip = ip_to_int(start_ip);
     range->end_ip = ip_to_int(end_ip);
     
@@ -581,13 +583,19 @@ void initialize_ip_pool(ip_range_t* range, const char* start_ip, const char* end
     range->pool_id = pool_id;
 
     // Validar que el rango sea correcto
-    if (range->start_ip > range->end_ip) {
-        fprintf(stderr, "Error: El rango de IPs no es válido. IP de inicio mayor que la IP de fin.\n");
-        exit(EXIT_FAILURE);  // Alternativamente, devolver un código de error
+    if (range->start_ip > range->end_ip) { 
+        fprintf(stderr, "Error: El rango de IPs no es válido. IP de inicio mayor que la IP de fin.\n"); 
+        exit(EXIT_FAILURE);  // Alternativamente, devolver un código de error 
     }
 
-    // Mensaje de depuración
-    printf("Rango de IPs inicializado: %s - %s (%u - %u)\n", start_ip, end_ip, range->start_ip, range->end_ip);
+    // Limitar el rango de IPs a MAX_IPS si excede el tamaño máximo
+    uint32_t total_ips_in_range = range->end_ip - range->start_ip + 1;
+    if (total_ips_in_range > MAX_IPS) {
+        range->end_ip = range->start_ip + MAX_IPS - 1;
+    }
+
+    // Mensaje de depuración 
+    printf("Rango de IPs inicializado: %s - %s (%u - %u)\n", start_ip, end_ip, range->start_ip, range->end_ip); 
 }
 
 uint32_t ip_to_int(const char* ip_str) { 
@@ -615,85 +623,77 @@ char* int_to_ip(uint32_t ip_int) {
 }
 
 uint32_t assign_ip_address(ip_range_t* range, struct dhcp_packet* request) {    
-    static uint32_t last_assigned_ip = 0;  // To track the last assigned IP
-    uint32_t potential_ip;
+    pthread_mutex_lock(&ip_assignment_mutex);  // Bloquear el acceso al árbol de asignaciones
+
+    // Iniciar desde la última IP asignada o desde el inicio del rango
+    if (last_assigned_ip < range->start_ip || last_assigned_ip > range->end_ip) {
+        last_assigned_ip = range->start_ip;  // Establecer dentro del rango de IPs
+    }
+
+    uint32_t potential_ip = last_assigned_ip;
     int attempts = 0;
     int max_attempts = range->end_ip - range->start_ip + 1;
 
-    pthread_mutex_lock(&ip_assignment_mutex);  // Protect access to last_assigned_ip and ip_assignment_root
-
-    // Start from the last assigned IP or the beginning of the range if uninitialized
-    if (last_assigned_ip == 0) {
-        last_assigned_ip = range->start_ip;
-    }
-
-    // Try to find the next available IP
-    potential_ip = last_assigned_ip;
+    // Intentar encontrar la siguiente IP disponible en el rango
     do {
         if (!find_ip_assignment(ip_assignment_root, potential_ip)) {
-            // If this IP is not assigned, we can use it
-            insert_ip_assignment(ip_assignment_root, potential_ip, request->chaddr, default_lease_time);
-            last_assigned_ip = potential_ip;  // Update last_assigned_ip for future assignments
-            pthread_mutex_unlock(&ip_assignment_mutex);  // Unlock before returning
+            // La IP no está asignada, podemos usarla
+            ip_assignment_root = insert_ip_assignment(ip_assignment_root, potential_ip, request->chaddr, default_lease_time);
+            last_assigned_ip = potential_ip + 1;  // Actualizar `last_assigned_ip` para el próximo cliente
+            if (last_assigned_ip > range->end_ip) {
+                last_assigned_ip = range->start_ip;  // Reiniciar el ciclo de IPs en el rango
+            }
+
             printf("Dirección IP asignada a cliente con MAC %02x:%02x:%02x:%02x:%02x:%02x: %s\n",
                    request->chaddr[0], request->chaddr[1], request->chaddr[2],
                    request->chaddr[3], request->chaddr[4], request->chaddr[5],
-                   int_to_ip(last_assigned_ip));
-            return last_assigned_ip;
+                   int_to_ip(potential_ip));
+            pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear antes de retornar
+            return potential_ip;
         }
 
+        // Avanzar a la siguiente IP
         potential_ip++;
-        // Wrap around to the start if we exceed the range
         if (potential_ip > range->end_ip) {
-            potential_ip = range->start_ip;
+            potential_ip = range->start_ip;  // Reiniciar desde el inicio del rango
         }
 
         attempts++;
-    } while (potential_ip != last_assigned_ip && attempts < max_attempts);  // Loop until we circle back or reach max attempts
+    } while (attempts < max_attempts);  // Intentar hasta cubrir todo el rango
 
-    pthread_mutex_unlock(&ip_assignment_mutex);  // Unlock the mutex
+    pthread_mutex_unlock(&ip_assignment_mutex);  // Liberar el mutex si no se encuentra IP
 
-    // If we reach here, no available IPs were found
+    // Si llegamos aquí, no hay IPs disponibles
     fprintf(stderr, "Error: No hay más direcciones IP disponibles en el rango.\n");
-    return 0;  // No IPs available
+    return 0;
 }
 
 ip_assignment_node_t* insert_ip_assignment(ip_assignment_node_t* root, uint32_t ip, uint8_t* mac, int lease_time) {
-    pthread_mutex_lock(&ip_assignment_mutex);  // Bloquear el acceso al árbol de asignaciones
-
-    ip_assignment_node_t* new_node = NULL;
-
-    // Insertar la nueva IP en el árbol
-    if (root == NULL) {
-        // Crear un nuevo nodo para la nueva asignación
-        new_node = (ip_assignment_node_t*)malloc(sizeof(ip_assignment_node_t));
-        if (new_node == NULL) {
-            fprintf(stderr, "Error: No se pudo asignar memoria para el nuevo nodo de IP.\n");
-            pthread_mutex_unlock(&ip_assignment_mutex);  // Liberar el mutex en caso de error
-            return root;
-        }
-
-        new_node->ip = ip;
-        memcpy(new_node->mac, mac, 6);  // Copiar la dirección MAC
-        new_node->lease_start = time(NULL);  // Tiempo de concesión actual
-        new_node->lease_time = lease_time;
-        new_node->left = new_node->right = NULL;
-
-        pthread_mutex_unlock(&ip_assignment_mutex);  // Liberar el mutex después de insertar
-        return new_node;  // Devolver el nuevo nodo
+    ip_assignment_node_t* new_node = (ip_assignment_node_t*)malloc(sizeof(ip_assignment_node_t));
+    if (new_node == NULL) {
+        fprintf(stderr, "Error: No se pudo asignar memoria para el nuevo nodo de IP.\n");
+        return root;
     }
 
-    // Insertar en el árbol según el valor de la IP
+    new_node->ip = ip;
+    memcpy(new_node->mac, mac, 6);  // Copiar la dirección MAC
+    new_node->lease_start = time(NULL);  // Tiempo de concesión actual
+    new_node->lease_time = lease_time;
+    new_node->left = new_node->right = NULL;
+
+    // Insertar el nuevo nodo en el árbol de asignaciones
+    if (root == NULL) {
+        return new_node;
+    }
+
     if (ip < root->ip) {
         root->left = insert_ip_assignment(root->left, ip, mac, lease_time);
     } else if (ip > root->ip) {
         root->right = insert_ip_assignment(root->right, ip, mac, lease_time);
-    } else if (ip == root->ip) {
-        // IP ya asignada, no sobrescribir, devolver el nodo existente
+    } else {
         fprintf(stderr, "Advertencia: La IP %u ya está asignada.\n", ip);
     }
 
-    pthread_mutex_unlock(&ip_assignment_mutex);  // Liberar el mutex
     return root;
 }
 
@@ -749,6 +749,25 @@ ip_assignment_node_t* find_min(ip_assignment_node_t* node) {
     return node;
 }
 
+ip_assignment_node_t* find_ip_assignment(ip_assignment_node_t* root, uint32_t ip) {
+    pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear antes de retornar
+    pthread_mutex_lock(&ip_assignment_mutex);  // Bloquear acceso al árbol de asignaciones
+    
+    while (root != NULL) {
+        if (ip == root->ip) {
+            pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear antes de retornar
+            return root;
+        } else if (ip < root->ip) {
+            root = root->left;
+        } else {
+            root = root->right;
+        }
+    }
+
+    pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear si no se encuentra la IP
+    return NULL;
+}
+
 void free_ip_assignment_tree(ip_assignment_node_t* root) {
     if (root == NULL) return;
     free_ip_assignment_tree(root->left);
@@ -771,25 +790,6 @@ ip_assignment_node_t* check_expired_leases(ip_assignment_node_t* root) {
     }
 
     return root;  // Retornar la nueva raíz después de posibles eliminaciones
-}
-
-ip_assignment_node_t* find_ip_assignment(ip_assignment_node_t* root, uint32_t ip) {
-    pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear antes de retornar
-    pthread_mutex_lock(&ip_assignment_mutex);  // Bloquear acceso al árbol de asignaciones
-    
-    while (root != NULL) {
-        if (ip == root->ip) {
-            pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear antes de retornar
-            return root;
-        } else if (ip < root->ip) {
-            root = root->left;
-        } else {
-            root = root->right;
-        }
-    }
-
-    pthread_mutex_unlock(&ip_assignment_mutex);  // Desbloquear si no se encuentra la IP
-    return NULL;
 }
 
 void send_dhcp_options(struct dhcp_packet* packet, int message_type, uint32_t assigned_ip) {
@@ -909,9 +909,6 @@ uint8_t* find_dhcp_option(uint8_t* options, uint8_t code) {
     while (i < 312) {  // Longitud fija del array de opciones
         uint8_t option_code = options[i];  // Código de la opción actual
 
-        // Depuración: imprimir el código y longitud de la opción actual
-        printf("Examining option code: %d, expected: %d\n", option_code, code);
-
         // Si encontramos el código de fin (255), detener la búsqueda
         if (option_code == 255) {
             printf("End of options reached.\n");
@@ -920,13 +917,11 @@ uint8_t* find_dhcp_option(uint8_t* options, uint8_t code) {
 
         // Si encontramos el código de opción deseado, devolver un puntero al valor de la opción
         if (option_code == code) {
-            printf("Option %d found, returning value.\n", code);
             return &options[i + 2];  // Retornar el puntero al valor (i + 2 salta código y longitud)
         }
 
         // Si no es la opción deseada, avanzar a la siguiente (código + longitud + valor)
         uint8_t option_length = options[i + 1];  // Longitud de la opción
-        printf("Skipping option %d with length %d.\n", option_code, option_length);
         i += 2 + option_length;  // Avanzar al siguiente código de opción
     }
 

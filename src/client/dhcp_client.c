@@ -11,7 +11,7 @@ void init_dhcp_client() {
     client.decline_attempts = 0;
 
     // Inicializar el generador de números aleatorios para `xid` y MAC aleatoria
-    srand(time(NULL));  // Semilla aleatoria basada en el tiempo actual
+    srand(time(NULL) ^ getpid());  // Semilla única combinando el tiempo y el PID del proceso
 
     generate_random_mac(client.mac_addr);
     printf("MAC Address generada para el cliente: %02X:%02X:%02X:%02X:%02X:%02X\n",

@@ -7,19 +7,18 @@ CFLAGS = -Wall -g
 # Archivos fuente
 SOURCES = dhcp_server.c main.c
 
-# Archivos objeto
-OBJECTS = $(SOURCES:.c=.o)
-
 # Nombre del ejecutable
 TARGET = dhcp_server
 
 # Regla por defecto
 all: $(TARGET)
 
-# Regla para construir el ejecutable
-$(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS)
+# Regla para construir el ejecutable y eliminar los objetos
+$(TARGET): $(SOURCES)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES)
+	@echo "Eliminando archivos objeto..."
+	@rm -f *.o
 
 # Limpiar los archivos objeto y el ejecutable
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f *.o $(TARGET)
