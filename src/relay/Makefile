@@ -1,24 +1,20 @@
 # Definir el compilador
 CC = gcc
-
-# Opciones de compilación
 CFLAGS = -Wall -g
 
-# Archivos fuente
-SOURCES = dhcp_server.c main.c
-
-# Nombre del ejecutable
-TARGET = dhcp_server
+# Archivos fuente y ejecutable
+SOURCES = dhcp_relay.c main.c
+TARGET = dhcp_relay
 
 # Regla por defecto
 all: $(TARGET)
 
-# Regla para construir el ejecutable y eliminar los objetos
+# Compilación del ejecutable y eliminación de objetos
 $(TARGET): $(SOURCES)
 	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES)
 	@echo "Eliminando archivos objeto..."
 	@rm -f *.o
 
-# Limpiar los archivos objeto y el ejecutable
+# Limpiar archivos objeto y ejecutable
 clean:
 	rm -f *.o $(TARGET)

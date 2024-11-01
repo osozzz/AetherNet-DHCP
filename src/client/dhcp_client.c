@@ -1,356 +1,543 @@
 #include "dhcp_client.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <time.h>
 
-#define DHCP_SERVER_PORT 67
-#define DHCP_CLIENT_PORT 68
-#define RETRY_DELAY 90  // Retardo de reintentos en segundos
+// Función que inicia el cliente DHCP
+void init_dhcp_client() {
 
-int lease_time = 0;
-int t1_time = 0; // Tiempo T1 para renovación
-struct in_addr assigned_ip; // Dirección IP asignada
-int renewed_once = 0;  // Indica si el lease ha sido renovado al menos una vez
+    struct sockaddr_in relay_addr, client_addr;
+    dhcp_client_t client;
+    const char* relay_ip = getenv("RELAY_IP");
 
+    // Inicializar el cliente
+    client.nak_attempts = 0;
+    client.decline_attempts = 0;
 
-void start_dhcp_client() {
-    int sockfd;
-    struct sockaddr_in server_addr, client_addr;
-    int broadcastEnable = 1;
-    struct in_addr offered_ip;  // Aquí almacenamos la IP ofrecida
-    int retry_count = 0;  // Contador de reintentos
-    
-    while (retry_count < 2) {  // Reintentar un máximo de 5 veces
-        // Crear socket
-        sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (sockfd < 0) {
-            perror("Error al crear el socket");
-            exit(EXIT_FAILURE);
-        }
+    // Inicializar el generador de números aleatorios para `xid` y MAC aleatoria
+    srand(time(NULL) ^ getpid());  // Semilla única combinando el tiempo y el PID del proceso
 
-        // Habilitar broadcast en el socket
-        if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
-            perror("Error al habilitar broadcast");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
+    generate_random_mac(client.mac_addr);
+    printf("MAC Address generada para el cliente: %02X:%02X:%02X:%02X:%02X:%02X\n",
+           client.mac_addr[0], client.mac_addr[1], client.mac_addr[2],
+           client.mac_addr[3], client.mac_addr[4], client.mac_addr[5]);
 
-        // Configurar dirección del cliente (puerto 68)
-        memset(&client_addr, 0, sizeof(client_addr));
-        client_addr.sin_family = AF_INET;
-        client_addr.sin_port = 0;
-        client_addr.sin_addr.s_addr = INADDR_ANY;
-
-        // Enlazar el socket a la dirección del cliente
-        if (bind(sockfd, (struct sockaddr *)&client_addr, sizeof(client_addr)) < 0) {
-            perror("Error al enlazar el socket");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-
-        // Configurar dirección del servidor (puerto 67)
-        memset(&server_addr, 0, sizeof(server_addr));
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(DHCP_SERVER_PORT);
-        server_addr.sin_addr.s_addr = INADDR_BROADCAST;
-        
-        socklen_t len = sizeof(client_addr);
-        if (getsockname(sockfd, (struct sockaddr *)&client_addr, &len) == -1) {
-            perror("Error obteniendo el puerto asignado");
-        } else {
-            printf("Puerto local dinámico asignado: %d\n", ntohs(client_addr.sin_port));
-        }
-
-        // Enviar mensaje DHCPDISCOVER
-        send_dhcp_discover(sockfd, &server_addr);
-
-        // Recibir respuesta (DHCP Offer)
-        receive_dhcp_offer(sockfd, &offered_ip);
-
-        // Si la IP ofrecida es 0.0.0.0, significa que el cliente recibió un DHCPNAK o no recibió IP
-        if (strcmp(inet_ntoa(offered_ip), "0.0.0.0") == 0) {
-            printf("No se recibió una oferta válida. Reintentando...\n");
-            retry_count++;
-            close(sockfd);  // Cerrar el socket actual
-            sleep(RETRY_DELAY);  // Esperar antes de reintentar
-            continue;  // Volver al inicio del bucle para intentar de nuevo
-        }
-
-        // Verificar si la IP ofrecida está en uso
-        if (check_ip_conflict(inet_ntoa(offered_ip))) {
-            // Si hay conflicto, enviar DHCPDECLINE
-            printf("IP ofrecida está en uso. Enviando DHCPDECLINE.\n");
-            send_dhcp_decline(sockfd, &offered_ip, &server_addr);
-        } else {
-            printf("IP ofrecida no está en uso. Enviando DHCPREQUEST.\n");
-            // Si no hay conflicto, continuar con DHCPREQUEST
-            send_dhcp_request(sockfd, &server_addr, &offered_ip);
-
-            // Recibir confirmación DHCPACK o DHCPNAK
-            if (receive_dhcp_ack_or_nak(sockfd) == 0) {
-                // Si recibimos DHCPNAK, reiniciar el proceso
-                printf("Reiniciando el proceso DHCP...\n");
-                retry_count++;
-                close(sockfd);  // Cerrar el socket actual
-                sleep(RETRY_DELAY);  // Esperar antes de reintentar
-                continue;  // Volver al inicio del bucle para intentar de nuevo
-            }
-
-            // Enviar DHCPRELEASE al finalizar
-            assigned_ip = offered_ip;
-            break;
-            //send_dhcp_release(sockfd, &server_addr, &offered_ip);
-        }
-    }  
-
-    // Iniciar el proceso de renovación del lease si aún no ha sido renovado
-    if (lease_time > 0 && !renewed_once) {
-        printf("Esperando a T1 para renovar el lease...\n");
-        sleep(t1_time);  // Esperar hasta el tiempo T1 para la renovación
-        renew_dhcp_lease(sockfd, &server_addr);  // Intentar renovar la IP
+    // Crear el socket UDP para el cliente con puerto dinámico
+    client.sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (client.sockfd < 0) {
+        perror("Error al crear el socket del cliente DHCP");
+        exit(EXIT_FAILURE);
     }
+    printf("Socket del cliente DHCP creado exitosamente.\n");
 
-    // Después de la renovación, liberar la IP
-    if (renewed_once) {
-        printf("Lease renovado una vez, liberando la IP...\n");
-        send_dhcp_release(sockfd, &server_addr, &assigned_ip);  // Enviar DHCPRELEASE
-    }
-
-    // Cerrar el socket al finalizar
-    close(sockfd);
-
-    // Si hemos excedido los reintentos
-    if (retry_count >= 2) {
-        printf("Error: Excedido el número máximo de reintentos.\n");
+    // Habilitar el broadcast en el socket
+    int broadcast_enable = 1;
+    if (setsockopt(client.sockfd, SOL_SOCKET, SO_BROADCAST, &broadcast_enable, sizeof(broadcast_enable)) < 0) {
+        perror("Error al habilitar broadcast en el socket del cliente DHCP");
+        close(client.sockfd);
         exit(EXIT_FAILURE);
     }
 
-    exit(0);
-}
+    // Configurar dirección del cliente
+    memset(&client_addr, 0, sizeof(client_addr));
+    client_addr.sin_family = AF_INET;
+    client_addr.sin_port = htons(68);
+    client_addr.sin_addr.s_addr = INADDR_ANY;
 
-void renew_dhcp_lease(int sockfd, struct sockaddr_in *server_addr) {
-    printf("Iniciando renovación de lease...\n");
-    send_dhcp_request(sockfd, server_addr, &assigned_ip);  // Enviar DHCPREQUEST para renovar
-
-    // Recibir confirmación DHCPACK o DHCPNAK
-    if (receive_dhcp_ack_or_nak(sockfd) == 1) {
-        printf("Lease renovado exitosamente.\n");
-        renewed_once = 1;  // Indicar que el lease ha sido renovado al menos una vez
-    } else {
-        printf("Error al renovar el lease. Intentando de nuevo...\n");
-        send_dhcp_request(sockfd, server_addr, &assigned_ip);  // Intentar renovar de nuevo
+    if (bind(client.sockfd, (struct sockaddr*)&client_addr, sizeof(client_addr)) < 0) {
+        perror("Error al hacer bind en el socket del cliente DHCP");
+        close(client.sockfd);
+        exit(EXIT_FAILURE);
     }
-}
 
-void send_dhcp_discover(int sockfd, struct sockaddr_in *server_addr) {
-    struct dhcp_packet discover_message;
+    // Obtener y mostrar el puerto asignado al cliente
+    socklen_t addr_len = sizeof(client_addr);
+    if (getsockname(client.sockfd, (struct sockaddr*)&client_addr, &addr_len) == -1) {
+        perror("Error al obtener la dirección del socket del cliente");
+    } else {
+        printf("Puerto asignado al cliente: %d\n", ntohs(client_addr.sin_port));
+    }
 
-    // Inicializar el mensaje DHCPDISCOVER
-    memset(&discover_message, 0, sizeof(discover_message)); // Limpiar la estructura
-    discover_message.op = 1;  // Solicitud (1 para cliente)
-    discover_message.htype = 1;  // Tipo de hardware: Ethernet
-    discover_message.hlen = 6;  // Longitud de hardware: 6 para dirección MAC
-    discover_message.xid = htonl(0x3903F326);  // ID de transacción (puede ser aleatorio)
+    // Configurar la dirección del relay DHCP (en lugar del servidor DHCP)
+    memset(&relay_addr, 0, sizeof(relay_addr));
+    relay_addr.sin_family = AF_INET;
+    relay_addr.sin_port = htons(68);  // Puerto del relay DHCP (1067)
+    if (relay_ip && inet_pton(AF_INET, relay_ip, &relay_addr.sin_addr) == 1) {
+        printf("Usando relay en la IP: %s\n", relay_ip);
+    } else {
+        relay_addr.sin_addr.s_addr = INADDR_BROADCAST;  // Usar broadcast si no se define IP
+    }
     
-    // Configurar la dirección MAC del cliente
-    discover_message.chaddr[0] = 0x00;
-    discover_message.chaddr[1] = 0x1A;
-    discover_message.chaddr[2] = 0x2B;
-    discover_message.chaddr[3] = 0x3C;
-    discover_message.chaddr[4] = 0x4D;
-    discover_message.chaddr[5] = 0x5E;
-
-    // Opciones DHCP (53 = DHCP Message Type, 1 = DHCPDISCOVER)
-    discover_message.options[0] = 53;
-    discover_message.options[1] = 1;
-    discover_message.options[2] = DHCP_DISCOVER;  // DHCPDISCOVER
-
-    // Enviar el mensaje al servidor DHCP
-    int send_len = sendto(sockfd, &discover_message, sizeof(discover_message), 0,
-                          (struct sockaddr *)server_addr, sizeof(*server_addr));
-    if (send_len < 0) {
-        perror("Error al enviar el mensaje DHCPDISCOVER");
-    } else {
-        printf("\033[1;34mMensaje DHCPDISCOVER enviado.\033[0m\n");
-    }
+    // Llamar a la función que maneja el ciclo DHCP, usando la dirección del relay
+    handle_dhcp_protocol(&client, &relay_addr);
 }
 
-void receive_dhcp_offer(int sockfd, struct in_addr *offered_ip) {
-    struct dhcp_packet offer_message;
-    struct sockaddr_in server_addr;
-    socklen_t addr_len = sizeof(server_addr);
+void handle_dhcp_protocol(dhcp_client_t* client, struct sockaddr_in* server_addr) {
+    fd_set readfds;
+    struct timeval timeout;
+    int discovery_sent = 0;  // Variable para controlar si ya se envió DHCP Discover
 
-    // Recibir el mensaje DHCP Offer del servidor
-    int recv_len = recvfrom(sockfd, &offer_message, sizeof(offer_message), 0,
-                            (struct sockaddr *)&server_addr, &addr_len);
-    if (recv_len < 0) {
-        perror("Error al recibir el mensaje DHCPOFFER");
-        return;
-    }
+    // Enviar el DHCPDISCOVER al relay una sola vez antes de entrar al ciclo
+    send_dhcp_discover(client->sockfd, server_addr, client->mac_addr);
+    discovery_sent = 1;
 
-    // Verificar si el mensaje recibido es un DHCP Offer
-    if (offer_message.options[0] == 53 && offer_message.options[2] == DHCP_OFFER) {
-        // Es un DHCP Offer
-        printf("\033[1;32mMensaje DHCPOFFER recibido.\033[0m\n");
-        offered_ip->s_addr = offer_message.yiaddr;  // Asignamos el valor de yiaddr a la estructura in_addr
-        printf("Dirección IP ofrecida: %s\n", inet_ntoa(*offered_ip));  // Imprimir la dirección IP ofrecida
-        // Obtener la duración del lease (opción 51)
-        for (int i = 0; i < sizeof(offer_message.options); i++) {
-            if (offer_message.options[i] == 51) {  // Opción de tiempo de lease
-                lease_time = ntohl(*(uint32_t*)&offer_message.options[i + 2]);
-                printf("Tiempo de lease recibido: %d segundos\n", lease_time);
-                t1_time = lease_time / 2;  // T1 es la mitad del tiempo de lease
-                break;
+    while (1) {  // Ciclo infinito para manejar respuestas y reintentos
+        // Preparar el descriptor de archivos para esperar la respuesta
+        FD_ZERO(&readfds);
+        FD_SET(client->sockfd, &readfds);
+
+        timeout.tv_sec = 120;  // Esperar máximo 20 segundos por una oferta
+        timeout.tv_usec = 0;
+
+        int ready = select(client->sockfd + 1, &readfds, NULL, NULL, &timeout);
+        if (ready < 0) {
+            perror("Error en select()");
+            close(client->sockfd);
+            exit(EXIT_FAILURE);
+        } else if (ready == 0) {
+            // Si hay un timeout sin recibir respuesta
+            printf("Timeout: No se recibió respuesta del servidor DHCP. Reintentando...\n");
+
+            if (discovery_sent > 0 || client->nak_attempts > 1 || client->decline_attempts > 1) {
+                // Volver a enviar DHCP Discover solo si aún no se ha enviado o tras NAK/Decline
+                send_dhcp_discover(client->sockfd, server_addr, client->mac_addr);
+                discovery_sent = 1;
             }
+
+            continue;  // Reintentar el proceso
         }
-    } else if (offer_message.options[0] == 53 && offer_message.options[2] == DHCP_NAK) {
-        // Si es un DHCP NAK, no se asigna una IP
-        printf("\033[1;33mMensaje DHCPNAK recibido. La solicitud fue rechazada.\033[0m\n");
-        offered_ip->s_addr = inet_addr("0.0.0.0");  // Indicar que no se recibió una IP válida
-    } else {
-        // Mensaje desconocido
-        printf("Mensaje desconocido recibido. No es DHCP Offer ni DHCP NAK.\n");
+
+        // Si hay datos disponibles en el socket, leer el paquete DHCP
+        struct dhcp_packet offer_message;
+        struct sockaddr_in recv_addr;
+        socklen_t addr_len = sizeof(recv_addr);
+
+        // Recibir el mensaje DHCP desde el relay o servidor
+        int recv_len = recvfrom(client->sockfd, &offer_message, sizeof(offer_message), 0,
+                                (struct sockaddr *)&recv_addr, &addr_len);
+        if (recv_len < 0) {
+            perror("Error al recibir el mensaje DHCP");
+            continue;  // Reintentar si falla
+        }
+
+        // Verificar las opciones del mensaje para identificar el tipo
+        uint8_t* message_type = find_dhcp_option(offer_message.options, 53);
+        if (message_type) {
+            switch (*message_type) {
+                case DHCP_OFFER:
+                    printf("Oferta DHCP recibida: %s\n", inet_ntoa(recv_addr.sin_addr));
+                    handle_dhcp_offer(client, server_addr, &offer_message);  // Procesar la oferta
+                    break;
+
+                case DHCP_ACK:
+                    printf("ACK recibido del servidor.\n");
+                    handle_dhcp_ack(client, &offer_message, server_addr);  // Procesar el ACK
+                    break;
+
+                case DHCP_NAK:
+                    printf("Recibido NAK del servidor. Reintentando...\n");
+                    handle_dhcp_nak(client);  // Procesar el NAK
+                    break;
+
+                case DHCP_DECLINE:
+                    printf("Recibido DECLINE. Reintentando...\n");
+                    client->decline_attempts++;
+                    if (client->decline_attempts > 1) {
+                        printf("Máximo de reintentos de DECLINE alcanzado. Cerrando cliente DHCP.\n");
+                        close(client->sockfd);
+                        exit(EXIT_FAILURE);
+                    }
+                    // Enviar DHCP Discover si se alcanza el límite de reintentos de Decline
+                    send_dhcp_discover(client->sockfd, server_addr, client->mac_addr);
+                    discovery_sent = 1;
+                    continue;
+
+                default:
+                    printf("Mensaje DHCP inesperado recibido. Reintentando...\n");
+                    continue;
+            }
+        } else {
+            printf("Paquete DHCP sin opción de tipo válida. Reintentando...\n");
+            continue;
+        }
     }
 }
 
-int check_ip_conflict(const char *ip_address) {
-    char command[100];
-    snprintf(command, sizeof(command), "ping -c 1 %s > /dev/null", ip_address);
-    int ret = system(command);
-    return ret == 0;  // Retorna 0 si hay respuesta, indicando conflicto
-}
+// Función que envía un DHCPDISCOVER al servidor
+void send_dhcp_discover(int sockfd, struct sockaddr_in* server_addr, uint8_t* mac_addr) {
+    struct dhcp_packet discover_packet;
+    memset(&discover_packet, 0, sizeof(struct dhcp_packet));
 
-int receive_dhcp_ack_or_nak(int sockfd) {
-    struct dhcp_packet response_message;
-    struct sockaddr_in server_addr;
-    socklen_t addr_len = sizeof(server_addr);
+    // Configurar los campos principales del paquete DHCPDISCOVER
+    discover_packet.op = 1;  // 1 = solicitud
+    discover_packet.htype = 1;  // Tipo de hardware: Ethernet
+    discover_packet.hlen = 6;   // Longitud de la dirección de hardware (6 bytes para MAC)
+    discover_packet.xid = htonl(random());  // Generar un ID de transacción aleatorio
+    discover_packet.flags = htons(0x8000);  // Solicitar respuesta de broadcast
 
-    // Recibir el mensaje DHCPACK o DHCPNAK del servidor
-    int recv_len = recvfrom(sockfd, &response_message, sizeof(response_message), 0,
-                            (struct sockaddr *)&server_addr, &addr_len);
-    if (recv_len < 0) {
-        perror("Error al recibir el mensaje DHCPACK o DHCPNAK");
-        return 0;
-    }
+    // Configurar la dirección MAC del cliente (se puede personalizar)
+    memcpy(discover_packet.chaddr, mac_addr, 6);
 
-    // Comprobar si es DHCPACK o DHCPNAK
-    if (response_message.options[2] == DHCP_ACK) {
-        printf("\033[1;35mMensaje DHCPACK recibido.\033[0m\n");
-        printf("Dirección IP asignada: %s\n", inet_ntoa(*(struct in_addr *)&response_message.yiaddr));
-        return 1;  // Indica que se recibió DHCPACK
-    } else if (response_message.options[2] == DHCP_NAK) {
-        printf("\033[1;33mMensaje DHCPNAK recibido. La solicitud fue rechazada.\033[0m\n");
-        return 0;  // Indica que se recibió DHCPNAK
+    // Opciones DHCP fijas
+    discover_packet.options[0] = 53;  // Opción 53: DHCP Message Type
+    discover_packet.options[1] = 1;   // Longitud de la opción
+    discover_packet.options[2] = DHCP_DISCOVER;  // DHCPDISCOVER
+
+    // Opción 55: Parameter Request List (Lista de parámetros solicitados)
+    discover_packet.options[3] = 55;  // Opción 55: Parameter Request List
+    discover_packet.options[4] = 3;   // Longitud de la opción
+    discover_packet.options[5] = 1;   // Solicitar Subnet Mask
+    discover_packet.options[6] = 3;   // Solicitar Router
+    discover_packet.options[7] = 6;   // Solicitar DNS
+
+    // Opción 255: Fin de las opciones
+    discover_packet.options[8] = 255;
+
+    // Calcular el tamaño del paquete real (base del paquete más las opciones)
+    ssize_t packet_size = sizeof(struct dhcp_packet) - sizeof(discover_packet.options) + 9;
+
+    // Enviar el paquete DISCOVER al servidor
+    ssize_t sent_bytes = sendto(sockfd, &discover_packet, packet_size, 0,
+                                (struct sockaddr*)server_addr, sizeof(*server_addr));
+    if (sent_bytes < 0) {
+        perror("Error al enviar el paquete DHCP DISCOVER");
     } else {
-        printf("Mensaje desconocido recibido. No es DHCPACK ni DHCPNAK.\n");
-        return 0;  // Indica que se recibió un mensaje desconocido
-    }
-
-    return 0;  // Si no es ninguno de los dos, retornamos 0 por seguridad
-}
-
-void send_dhcp_decline(int sockfd, struct in_addr *offered_ip, struct sockaddr_in *server_addr) {
-    struct dhcp_packet decline_message;
-    memset(&decline_message, 0, sizeof(decline_message));
-
-    // Configurar el mensaje DHCPDECLINE
-    decline_message.op = 1;  // Solicitud del cliente
-    decline_message.htype = 1;  // Tipo de hardware: Ethernet
-    decline_message.hlen = 6;  // Longitud de la dirección MAC
-    decline_message.xid = htonl(0x3903F326);  // Usar el mismo Transaction ID
-    memcpy(decline_message.chaddr, "001A2B3C4D5E", 6);  // Dirección MAC del cliente
-    decline_message.yiaddr = offered_ip->s_addr;  // IP en conflicto
-
-    // Opciones DHCP (53 = DHCP Message Type, 4 = DHCPDECLINE)
-    decline_message.options[0] = 53;
-    decline_message.options[1] = 1;
-    decline_message.options[2] = 4;  // DHCPDECLINE
-
-    // Enviar el mensaje DHCPDECLINE
-    if (sendto(sockfd, &decline_message, sizeof(decline_message), 0, (struct sockaddr *)server_addr, sizeof(*server_addr)) < 0) {
-        perror("Error al enviar el mensaje DHCPDECLINE");
-    } else {
-        printf("\033[0;33mMensaje DHCPDECLINE enviado.\033[0m\n");
+        printf("Paquete DHCP DISCOVER enviado.\n");
     }
 }
 
-void send_dhcp_request(int sockfd, struct sockaddr_in *server_addr, struct in_addr *offered_ip) {
-    struct dhcp_packet request_message;
+// Función auxiliar para validar que la IP ofrecida está dentro de un rango válido
+int validate_offered_ip(struct in_addr* offered_ip, struct in_addr* subnet_mask, struct in_addr* network_ip) {
+    uint32_t offered = ntohl(offered_ip->s_addr);
+    uint32_t mask = ntohl(subnet_mask->s_addr);
+    uint32_t network = ntohl(network_ip->s_addr);
 
-    // Inicializar el mensaje DHCPREQUEST
-    memset(&request_message, 0, sizeof(request_message)); // Limpiar la estructura
-    request_message.op = 3;  // Solicitud (1 para cliente)
-    request_message.htype = 1;  // Tipo de hardware: Ethernet
-    request_message.hlen = 6;  // Longitud de hardware: 6 para dirección MAC
-    request_message.xid = htonl(0x3903F326);  // Usar el mismo Transaction ID del DHCPDISCOVER
-    
-    // Configurar la dirección MAC del cliente
-    request_message.chaddr[0] = 0x00;
-    request_message.chaddr[1] = 0x1A;
-    request_message.chaddr[2] = 0x2B;
-    request_message.chaddr[3] = 0x3C;
-    request_message.chaddr[4] = 0x4D;
-    request_message.chaddr[5] = 0x5E;
-
-    // Usar la IP ofrecida (recibida en el DHCPOFFER)
-    request_message.yiaddr = offered_ip->s_addr;
-
-    // Opciones DHCP (53 = DHCP Message Type, 3 = DHCPREQUEST)
-    request_message.options[0] = 53;
-    request_message.options[1] = 3;
-    request_message.options[2] = DHCP_REQUEST;  // DHCPREQUEST
-
-    // Enviar el mensaje al servidor DHCP
-    int send_len = sendto(sockfd, &request_message, sizeof(request_message), 0,
-                          (struct sockaddr *)server_addr, sizeof(*server_addr));
-    if (send_len < 0) {
-        perror("Error al enviar el mensaje DHCPREQUEST");
+    // Aplicar la máscara de subred a la IP ofrecida y compararla con la red esperada
+    if ((offered & mask) == (network & mask)) {
+        printf("IP ofrecida (%s) válida y dentro de la red.\n", inet_ntoa(*offered_ip));
+        return 1;  // La IP está dentro del rango válido
     } else {
-        printf("\033[1;36mMensaje DHCPREQUEST enviado.\033[0m\n");
+        printf("Error: IP ofrecida (%s) fuera de la red.\n", inet_ntoa(*offered_ip));
+        return 0;  // La IP está fuera del rango válido
     }
 }
 
-void receive_dhcp_ack(int sockfd) {
-    struct dhcp_packet ack_message;
-    struct sockaddr_in server_addr;
-    socklen_t addr_len = sizeof(server_addr);
+// Función que maneja la oferta DHCP (DHCPOFFER)
+void handle_dhcp_offer(dhcp_client_t* client, struct sockaddr_in* server_addr, struct dhcp_packet* offer_packet) {
+    struct in_addr offered_ip;
+    offered_ip.s_addr = offer_packet->yiaddr;  // IP ofrecida por el servidor
 
-    // Recibir el mensaje DHCPACK del servidor
-    int recv_len = recvfrom(sockfd, &ack_message, sizeof(ack_message), 0,
-                            (struct sockaddr *)&server_addr, &addr_len);
-    if (recv_len < 0) {
-        perror("Error al recibir el mensaje DHCPACK");
+    printf("Procesando la oferta DHCP. IP ofrecida: %s\n", inet_ntoa(offered_ip));
+
+    // Validar la IP ofrecida utilizando la máscara de subred y la IP de red base
+    if (validate_offered_ip(&offered_ip, &(client->subnet_mask), &(client->network_ip))) {
+        // Si la validación es exitosa, enviar DHCPREQUEST
+        printf("IP ofrecida válida. Enviando DHCPREQUEST para la IP: %s\n", inet_ntoa(offered_ip));
+        send_dhcp_request(client->sockfd, server_addr, &offered_ip, client->mac_addr);
     } else {
-        printf("\033[1;35mMensaje DHCPACK recibido.\033[0m\n");
-        printf("Dirección IP asignada: %s\n", inet_ntoa(*(struct in_addr *)&ack_message.yiaddr));
+        // Si la validación falla, enviar DHCPDECLINE
+        printf("IP ofrecida inválida. Enviando DHCPDECLINE para la IP: %s\n", inet_ntoa(offered_ip));
+        send_dhcp_decline(client->sockfd, &offered_ip, &(client->server_addr), client->mac_addr);
     }
 }
 
-void send_dhcp_release(int sockfd, struct sockaddr_in *server_addr, struct in_addr *assigned_ip) {
-    struct dhcp_packet release_message;
-    memset(&release_message, 0, sizeof(release_message));
+// Función que envía un DHCPREQUEST al servidor
+void send_dhcp_request(int sockfd, struct sockaddr_in* server_addr, struct in_addr* offered_ip, uint8_t* mac_addr) {
+    struct dhcp_packet request_packet;
+    memset(&request_packet, 0, sizeof(struct dhcp_packet));
 
-    // Configurar el mensaje DHCPRELEASE
-    release_message.op = 7;  // Solicitud del cliente
-    release_message.htype = 1;  // Tipo de hardware: Ethernet
-    release_message.hlen = 6;  // Longitud de la dirección MAC
-    release_message.xid = htonl(0x3903F326);  // Usamos el Transaction ID del ACK
-    memcpy(release_message.chaddr, "001A2B3C4D5E", 6);  // Dirección MAC del cliente
-    release_message.ciaddr = assigned_ip->s_addr;  // IP asignada que se va a liberar
+    // Configurar los campos principales del paquete DHCPREQUEST
+    request_packet.op = 1;  // 1 = solicitud
+    request_packet.htype = 1;  // Tipo de hardware: Ethernet
+    request_packet.hlen = 6;   // Longitud de la dirección de hardware (6 bytes para MAC)
+    request_packet.xid = htonl(random());  // Generar un ID de transacción aleatorio
+    request_packet.flags = htons(0x8000);  // Solicitar respuesta de broadcast
 
-    // Opciones DHCP (53 = DHCP Message Type, 7 = DHCPRELEASE)
-    release_message.options[0] = 53;
-    release_message.options[1] = 1;
-    release_message.options[2] = 7;  // DHCPRELEASE
+    // Configurar la dirección MAC del cliente (se puede personalizar
+    memcpy(request_packet.chaddr, mac_addr, 6); // Luego copia los 6 bytes de la dirección MAC
+    request_packet.ciaddr = offered_ip->s_addr;
 
-    // Enviar el mensaje DHCPRELEASE
-    if (sendto(sockfd, &release_message, sizeof(release_message), 0, (struct sockaddr *)server_addr, sizeof(*server_addr)) < 0) {
-        perror("Error al enviar el mensaje DHCPRELEASE");
+    // Opciones DHCP fijas
+    request_packet.options[0] = 53;  // Opción 53: DHCP Message Type
+    request_packet.options[1] = 1;   // Longitud de la opción
+    request_packet.options[2] = DHCP_REQUEST;  // DHCPREQUEST
+
+    // Opción 50: IP solicitada
+    request_packet.options[3] = 50;  // Opción 50: Requested IP Address
+    request_packet.options[4] = 4;   // Longitud de la opción (4 bytes para dirección IP)
+    memcpy(&request_packet.options[5], &offered_ip->s_addr, 4);  // Copiar la IP solicitada
+
+    // Opción 54: Server Identifier (la IP del servidor DHCP)
+    request_packet.options[9] = 54;  // Opción 54: Server Identifier
+    request_packet.options[10] = 4;  // Longitud de la opción (4 bytes para dirección IP)
+    memcpy(&request_packet.options[11], &server_addr->sin_addr.s_addr, 4);  // Copiar la IP del servidor
+
+    // Opción 55: Parameter Request List (Lista de parámetros solicitados)
+    request_packet.options[15] = 55;  // Opción 55: Parameter Request List
+    request_packet.options[16] = 3;   // Longitud de la opción
+    request_packet.options[17] = 1;   // Solicitar Subnet Mask
+    request_packet.options[18] = 3;   // Solicitar Router
+    request_packet.options[19] = 6;   // Solicitar DNS
+
+    // Opción 255: Fin de las opciones
+    request_packet.options[20] = 255;
+
+    ssize_t packet_size = sizeof(struct dhcp_packet) - sizeof(request_packet.options) + 21;
+
+    // Enviar el paquete REQUEST al servidor
+    ssize_t sent_bytes = sendto(sockfd, &request_packet, packet_size, 0,
+                                (struct sockaddr*)server_addr, sizeof(*server_addr));
+    if (sent_bytes < 0) {
+        perror("Error al enviar el paquete DHCPREQUEST");
     } else {
-        printf("\033[1;32mMensaje DHCPRELEASE enviado.\033[0m\n");
+        printf("Paquete DHCPREQUEST enviado.\n");
     }
+}
+
+// Función que envía un DHCPDECLINE al servidor
+void send_dhcp_decline(int sockfd, struct in_addr* offered_ip, struct sockaddr_in* server_addr, uint8_t* mac_addr) {
+    struct dhcp_packet decline_packet;
+    memset(&decline_packet, 0, sizeof(struct dhcp_packet));
+
+    // Configurar los campos principales del paquete DHCPDECLINE
+    decline_packet.op = 1;  // 1 = solicitud
+    decline_packet.htype = 1;  // Tipo de hardware: Ethernet
+    decline_packet.hlen = 6;   // Longitud de la dirección de hardware (6 bytes para MAC)
+    decline_packet.xid = htonl(random());  // Generar un ID de transacción aleatorio
+    decline_packet.flags = htons(0x8000);  // Solicitar respuesta de broadcast
+
+    // Establecer la IP ofrecida como la IP rechazada (yiaddr)
+    decline_packet.yiaddr = offered_ip->s_addr;
+
+    // Configurar la dirección MAC del cliente (se puede personalizar)
+    memcpy(&decline_packet.chaddr, mac_addr, 6);
+
+    // Opciones DHCP fijas
+    decline_packet.options[0] = 53;  // Opción 53: DHCP Message Type
+    decline_packet.options[1] = 1;   // Longitud de la opción
+    decline_packet.options[2] = DHCP_DECLINE;  // DHCPDECLINE
+
+    // Opción 50: IP ofrecida que estamos rechazando
+    decline_packet.options[3] = 50;  // Opción 50: Requested IP Address
+    decline_packet.options[4] = 4;   // Longitud de la opción (4 bytes para dirección IP)
+    memcpy(&decline_packet.options[5], &offered_ip->s_addr, 4);  // Copiar la IP ofrecida
+
+    // Opción 54: Server Identifier (la IP del servidor DHCP)
+    decline_packet.options[9] = 54;  // Opción 54: Server Identifier
+    decline_packet.options[10] = 4;  // Longitud de la opción (4 bytes para dirección IP)
+    memcpy(&decline_packet.options[11], &server_addr->sin_addr.s_addr, 4);  // Copiar la IP del servidor
+
+    // Opción 255: Fin de las opciones
+    decline_packet.options[15] = 255;
+
+    // Calcular el tamaño del paquete real (base del paquete más las opciones)
+    ssize_t packet_size = sizeof(struct dhcp_packet) - sizeof(decline_packet.options) + 16;  // 16 por las opciones añadidas
+
+    // Enviar el paquete DECLINE al servidor
+    ssize_t sent_bytes = sendto(sockfd, &decline_packet, packet_size, 0,
+                                (struct sockaddr*)server_addr, sizeof(*server_addr));
+    if (sent_bytes < 0) {
+        perror("Error al enviar el paquete DHCPDECLINE");
+    } else {
+        printf("Paquete DHCPDECLINE enviado.\n");
+    }
+}
+
+// Función que maneja el DHCPNAK (rechazo de solicitud de IP o renovación)
+void handle_dhcp_nak(dhcp_client_t* client) {
+    printf("Procesando DHCP NAK del servidor...\n");
+
+    // Abandonar la IP ofrecida
+    printf("La solicitud de IP %s ha sido rechazada por el servidor.\n", inet_ntoa(client->offered_ip));
+    client->offered_ip.s_addr = 0;  // Borrar la IP ofrecida
+
+    // Comprobar el estado de los intentos de NAK
+    client->nak_attempts++;
+    if (client->nak_attempts > 1) {
+        printf("Máximo de reintentos de NAK alcanzado. Cerrando cliente DHCP.\n");
+        close(client->sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Reintentar el proceso desde el principio: enviar DHCP Discover de nuevo
+    printf("Reintentando el proceso de DHCP Discover...\n");
+    send_dhcp_discover(client->sockfd, &(client->server_addr), client->mac_addr);
+}
+
+// Función que maneja el DHCPACK (confirmación de asignación de IP)
+void handle_dhcp_ack(dhcp_client_t* client, struct dhcp_packet* ack_packet, struct sockaddr_in* server_addr) {
+    printf("Procesando DHCP ACK del servidor...\n");
+
+    // Extraer la IP asignada (yiaddr)
+    client->offered_ip.s_addr = ack_packet->yiaddr;
+    printf("IP asignada por el servidor: %s\n", inet_ntoa(client->offered_ip));
+
+    // Extraer las opciones importantes del ACK
+    // Extraer las opciones importantes del ACK (Submask, Router, DNS, Lease Time)
+    uint8_t* subnet_mask_option = find_dhcp_option(ack_packet->options, 1);  // Opción 1: Subnet Mask
+    uint8_t* router_option = find_dhcp_option(ack_packet->options, 3);       // Opción 3: Gateway (router)
+    uint8_t* dns_option = find_dhcp_option(ack_packet->options, 6);          // Opción 6: DNS
+    uint8_t* lease_time_option = find_dhcp_option(ack_packet->options, 51);  // Opción 51: Lease Time
+
+    // Procesar la máscara de subred
+    if (subnet_mask_option) {
+        memcpy(&(client->subnet_mask.s_addr), subnet_mask_option, 4);
+        printf("Máscara de subred asignada: %s\n", inet_ntoa(client->subnet_mask));
+    } else {
+        printf("No se recibió la opción de Máscara de subred.\n");
+    }
+
+    // Procesar el Gateway (router)
+    struct in_addr router_ip;
+    if (router_option) {
+        memcpy(&(router_ip.s_addr), router_option, 4);
+        printf("Puerta de enlace (Gateway) asignada: %s\n", inet_ntoa(router_ip));
+    } else {
+        printf("No se recibió la opción de Puerta de enlace.\n");
+    }
+
+    // Procesar los servidores DNS
+    struct in_addr dns_ip;
+    if (dns_option) {
+        memcpy(&(dns_ip.s_addr), dns_option, 4);
+        printf("Servidor DNS asignado: %s\n", inet_ntoa(dns_ip));
+    } else {
+        printf("No se recibió la opción de Servidor DNS.\n");
+    }
+
+    // Procesar el tiempo de concesión (lease time)
+    if (lease_time_option) {
+        client->lease_time = ntohl(*(uint32_t*)lease_time_option);  // Convertir desde formato de red a host
+        printf("Tiempo de concesión (lease time): %u segundos\n", client->lease_time);
+
+        // Calcular tiempos de renovación (T1) y rebind (T2)
+        client->renewal_time = client->lease_time / 2;      // T1: A la mitad del lease time
+        client->rebind_time = (client->lease_time * 7) / 8; // T2: A 7/8 del lease time
+        printf("Tiempo para renovación (T1): %u segundos\n", client->renewal_time);
+        printf("Tiempo para rebind (T2): %u segundos\n", client->rebind_time);
+    } else {
+        printf("No se recibió la opción de Tiempo de concesión (lease time).\n");
+    }
+    // Llamar a la función de manejo del ciclo de renovación del lease
+    handle_lease_renewal(client, server_addr, &client->offered_ip);
+}
+
+// Función para manejar la renovación del lease (T1 y T2)
+void handle_lease_renewal(dhcp_client_t* client, struct sockaddr_in* server_addr, struct in_addr* offered_ip) {
+    struct timeval current_time, start_time;
+    gettimeofday(&start_time, NULL);  // Obtener el tiempo actual cuando se asigna el lease
+    int t1_count = 0;
+    int t2_count = 0;
+
+    while (1) {
+        gettimeofday(&current_time, NULL);  // Obtener el tiempo actual en cada ciclo
+        long elapsed_time = current_time.tv_sec - start_time.tv_sec;
+
+        if (elapsed_time >= client->lease_time) {
+            printf("Lease expirado. Enviando Release y Cerrando cliente DHCP.\n");
+            send_dhcp_release(client, server_addr, offered_ip);
+            close(client->sockfd);
+            exit(EXIT_FAILURE);  // Terminar el proceso cuando el lease expira
+        }
+
+        if (elapsed_time >= client->rebind_time && t2_count < 1) {
+            // T2 alcanzado: enviar un DHCP Request en broadcast (rebind)
+            printf("Tiempo T2 alcanzado. Enviando DHCP Request en broadcast (rebind).\n");
+            struct sockaddr_in broadcast_addr;
+            memset(&broadcast_addr, 0, sizeof(broadcast_addr));
+            broadcast_addr.sin_family = AF_INET;
+            broadcast_addr.sin_port = htons(67);  // Puerto del servidor DHCP (67)
+            broadcast_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);  // Usar broadcast
+
+            send_dhcp_request(client->sockfd, &broadcast_addr, &(client->offered_ip), client->mac_addr);  // Rebind en broadcast
+            t2_count++;
+        } else if (elapsed_time >= client->renewal_time && t1_count < 1) {
+            // T1 alcanzado: enviar un DHCP Request directamente al servidor (renovación)
+            printf("Tiempo T1 alcanzado. Enviando DHCP Request al servidor para renovación.\n");
+            send_dhcp_request(client->sockfd, server_addr, offered_ip, client->mac_addr);  // Renovación (T1)
+            t1_count++;
+        }
+
+        // Usar select para esperar de forma más eficiente
+        struct timeval wait_time;
+        long wait_seconds = client->lease_time - elapsed_time;
+        wait_time.tv_sec = (wait_seconds > 3) ? 3 : wait_seconds;
+        wait_time.tv_usec = 0;
+
+        select(0, NULL, NULL, NULL, &wait_time);  // Suspender el ciclo durante `wait_time` segundos
+    }
+}
+
+// Función para enviar un mensaje DHCP Release
+void send_dhcp_release(dhcp_client_t* client, struct sockaddr_in* server_addr, struct in_addr* offered_ip) {
+    struct dhcp_packet release_packet;
+    memset(&release_packet, 0, sizeof(struct dhcp_packet));
+
+    // Configurar los campos principales del paquete DHCPRELEASE
+    release_packet.op = 1;  // 1 = solicitud
+    release_packet.htype = 1;  // Tipo de hardware: Ethernet
+    release_packet.hlen = 6;   // Longitud de la dirección de hardware (6 bytes para MAC)
+    release_packet.xid = htonl(random());  // Identificador de transacción aleatorio
+    release_packet.flags = htons(0x8000);  // Bandera de fin de opciones
+
+    // Configurar la direccion MAC del cliente
+    memcpy(release_packet.chaddr, client->mac_addr, 6);
+    // Configurar la dirección IP del servidor DHCP
+    release_packet.ciaddr = offered_ip->s_addr;
+
+    // Opciones DHCP Fijas
+    release_packet.options[0] = 53;  // Opción 53: Tipo de mensaje DHCP
+    release_packet.options[1] = 1;   // Longitud de la opción
+    release_packet.options[2] = DHCP_RELEASE;  // DHCPRELEASE
+
+    // Opción de fin (código 255)
+    release_packet.options[3] = 255;   // Longitud de la opción
+
+    ssize_t packet_size = sizeof(struct dhcp_packet) - sizeof(release_packet.options) + 4;
+
+    // Enviar el paquete REQUEST al servidor
+    ssize_t sent_bytes = sendto(client->sockfd, &release_packet, packet_size, 0,
+                                (struct sockaddr*)server_addr, sizeof(*server_addr));
+    if (sent_bytes < 0) {
+        perror("Error al enviar el paquete DHCPRELEASE");
+    } else {
+        printf("Paquete DHCPRELEASE enviado.\n");
+    }
+}
+
+uint8_t* find_dhcp_option(uint8_t* options, uint8_t code) {
+    int i = 0;
+
+    // Recorrer las opciones hasta encontrar la opción de fin (código 255)
+    while (i < 312) {  // Longitud fija del array de opciones
+        uint8_t option_code = options[i];  // Código de la opción actual
+
+        // Si encontramos el código de fin (255), detener la búsqueda
+        if (option_code == 255) {
+            break;
+        }
+
+        // Si encontramos el código de opción deseado, devolver un puntero al valor de la opción
+        if (option_code == code) {
+            return &options[i + 2];  // Retornar el puntero al valor (i + 2 salta código y longitud)
+        }
+
+        // Si no es la opción deseada, avanzar a la siguiente (código + longitud + valor)
+        uint8_t option_length = options[i + 1];  // Longitud de la opción
+        i += 2 + option_length;  // Avanzar al siguiente código de opción
+    }
+
+    // Si no se encuentra la opción, devolver NULL
+    return NULL;
+}
+
+// Función para generar una MAC Address aleatoria
+void generate_random_mac(uint8_t* mac_addr) {
+
+    // Generar los primeros 3 bytes aleatorios
+    mac_addr[0] = 0x02;  // Establecer unicast (bit 0 es 0) y localmente administrada (bit 1 es 1)
+    mac_addr[1] = rand() % 256;
+    mac_addr[2] = rand() % 256;
+
+    // Generar los siguientes 3 bytes aleatorios
+    mac_addr[3] = rand() % 256;
+    mac_addr[4] = rand() % 256;
+    mac_addr[5] = rand() % 256;
 }

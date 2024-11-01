@@ -1,0 +1,90 @@
+services:
+  dhcp_server:
+    image: dhcp_simulator
+    container_name: Server
+    networks:
+      net_a:
+        ipv4_address: 172.19.2.228
+    environment:
+      - DHCP_SERVER_IP=172.19.2.228
+      - SUBNET_MASK=255.255.255.0
+      - GATEWAY_IP=172.19.2.228
+      - DNS_SERVER_IP=8.8.8.8
+      - START_IP=172.19.2.100
+      - END_IP=172.19.2.200
+    command: ["/app/server"]
+    ports:
+      - "67:67/udp"
+
+  dhcp_relay:
+    image: dhcp_simulator
+    container_name: Relay
+    networks:
+      net_a:
+        ipv4_address: 172.19.2.201
+      net_b:
+        ipv4_address: 172.19.3.201
+      net_c:
+        ipv4_address: 172.19.4.201
+    depends_on:
+      - dhcp_server
+    environment:
+      - SERVER_IP=172.19.2.228
+    command: ["/app/relay"]
+    ports:
+      - "68:68/udp"
+
+  dhcp_client_a:
+    image: dhcp_simulator
+    container_name: Client_A
+    networks:
+      net_a:
+        ipv4_address: 172.19.2.202
+    depends_on:
+      - dhcp_relay
+    environment:
+      - RELAY_IP=172.19.2.201
+    command: ["/app/client"]
+
+  dhcp_client_b:
+    image: dhcp_simulator
+    container_name: Client_B
+    networks:
+      net_b:
+        ipv4_address: 172.19.3.203 
+    depends_on:
+      - dhcp_relay
+    environment:  
+      - RELAY_IP=172.19.3.201
+    command: ["/app/client"]
+
+  dhcp_client_c:
+    image: dhcp_simulator
+    container_name: Client_C
+    networks:
+      net_c:
+        ipv4_address: 172.19.4.204
+    depends_on:
+      - dhcp_relay
+    environment:
+      - RELAY_IP=172.19.4.201
+    command: ["/app/client"]
+
+networks:
+  net_a:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.2.0/24
+
+  net_b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.3.0/24
+
+  net_c:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.4.0/24
