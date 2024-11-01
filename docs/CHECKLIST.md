@@ -16,7 +16,7 @@
 - [x] Manejar múltiples solicitudes simultáneamente (concurrencia).
 - [x] Registrar todas las asignaciones de direcciones IP y el tiempo de arrendamiento.
 - [x] Soportar las fases y mensajes principales del proceso DHCP: DISCOVER, OFFER, REQUEST, ACK (opcionalmente NAK, DECLINE, y RELEASE).
-- [ ] Atender solicitudes de clientes en subredes diferentes mediante el uso de un DHCP relay.
+- [x] Atender solicitudes de clientes en subredes diferentes mediante el uso de un DHCP relay.
 - [x] Manejar correctamente errores y condiciones especiales (por ejemplo, falta de direcciones IP disponibles).
 - [x] Soportar concurrencia utilizando hilos para gestionar múltiples peticiones simultáneas.
 

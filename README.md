@@ -9,7 +9,6 @@ AetherNet es una implementación de un servidor y cliente DHCP, desarrollada en 
 - `src/`: Código fuente del servidor y cliente DHCP.
   - `server/`: Implementación del servidor DHCP.
   - `client/`: Implementación del cliente DHCP.
-  - `common/`: Definiciones y funciones compartidas entre cliente y servidor.
 - `docs/`: Documentación y diagramas UML.
 - `tests/`: Casos y scripts de prueba.
 

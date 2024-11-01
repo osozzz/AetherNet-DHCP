@@ -35,23 +35,28 @@ client_thread_info_t* client_threads[HASH_TABLE_SIZE] = {NULL}; // Inicializar l
 void init_dhcp_server(ip_range_t* range) {  // Inicializar el servidor DHCP
     struct sockaddr_in server_addr, relay_addr;
 
-    /// Inicializar las variables IP
-    if (inet_pton(AF_INET, "255.255.255.0", &subnet_mask) != 1) {
+    /// Inicializar las variables IP desde variables de entorno
+    const char *subnet_mask_env = getenv("SUBNET_MASK");
+    const char *gateway_ip_env = getenv("GATEWAY_IP");
+    const char *dns_server_ip_env = getenv("DNS_SERVER_IP");
+    const char *server_ip_env = getenv("DHCP_SERVER_IP");
+
+    if (!subnet_mask_env || inet_pton(AF_INET, subnet_mask_env, &subnet_mask) != 1) {
         perror("Error al convertir la máscara de subred");
         exit(EXIT_FAILURE);
     }
-    
-    if (inet_pton(AF_INET, dhcp_server_ip, &gateway_ip) != 1) {
+
+    if (!gateway_ip_env || inet_pton(AF_INET, gateway_ip_env, &gateway_ip) != 1) {
         perror("Error al convertir la IP del gateway");
         exit(EXIT_FAILURE);
     }
-    
-    if (inet_pton(AF_INET, "8.8.8.8", &dns_server_ip) != 1) {
+
+    if (!dns_server_ip_env || inet_pton(AF_INET, dns_server_ip_env, &dns_server_ip) != 1) {
         perror("Error al convertir la IP del servidor DNS");
         exit(EXIT_FAILURE);
     }
-    
-    if (inet_pton(AF_INET, dhcp_server_ip, &server_ip) != 1) {
+
+    if (!server_ip_env || inet_pton(AF_INET, server_ip_env, &server_ip) != 1) {
         perror("Error al convertir la IP del servidor DHCP");
         exit(EXIT_FAILURE);
     }
@@ -348,7 +353,7 @@ void handle_dhcp_discover(int sockfd, struct sockaddr_in* client_addr, struct dh
         printf("No se pudo asignar una dirección IP para el cliente con MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                request->chaddr[0], request->chaddr[1], request->chaddr[2],
                request->chaddr[3], request->chaddr[4], request->chaddr[5]);
-        send_dhcp_nack(sockfd, client_addr, request);
+        send_dhcp_nak(sockfd, client_addr, request);
         return;
     }
 

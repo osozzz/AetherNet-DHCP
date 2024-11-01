@@ -5,6 +5,7 @@ void init_dhcp_client() {
 
     struct sockaddr_in relay_addr, client_addr;
     dhcp_client_t client;
+    const char* relay_ip = getenv("RELAY_IP");
 
     // Inicializar el cliente
     client.nak_attempts = 0;
@@ -37,7 +38,7 @@ void init_dhcp_client() {
     // Configurar dirección del cliente
     memset(&client_addr, 0, sizeof(client_addr));
     client_addr.sin_family = AF_INET;
-    client_addr.sin_port = 0;
+    client_addr.sin_port = htons(68);
     client_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(client.sockfd, (struct sockaddr*)&client_addr, sizeof(client_addr)) < 0) {
@@ -58,7 +59,11 @@ void init_dhcp_client() {
     memset(&relay_addr, 0, sizeof(relay_addr));
     relay_addr.sin_family = AF_INET;
     relay_addr.sin_port = htons(68);  // Puerto del relay DHCP (1067)
-    relay_addr.sin_addr.s_addr = INADDR_BROADCAST;  // Usar broadcast
+    if (relay_ip && inet_pton(AF_INET, relay_ip, &relay_addr.sin_addr) == 1) {
+        printf("Usando relay en la IP: %s\n", relay_ip);
+    } else {
+        relay_addr.sin_addr.s_addr = INADDR_BROADCAST;  // Usar broadcast si no se define IP
+    }
     
     // Llamar a la función que maneja el ciclo DHCP, usando la dirección del relay
     handle_dhcp_protocol(&client, &relay_addr);

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Directorios de los binarios
-CLIENT_BIN="../src/client/dhcp_client"
-RELAY_BIN="../src/relay/dhcp_relay"
-SERVER_BIN="../src/server/dhcp_server"
+CLIENT_BIN="./dhcp_client"
+RELAY_BIN="./dhcp_relay"
+SERVER_BIN="./dhcp_server"
 
 # Iniciar el servidor y el relay en el fondo
 start_server_and_relay() {
@@ -72,7 +72,7 @@ test_ip_exhaustion() {
     start_server_and_relay
 
     echo "Iniciando 12 clientes DHCP para verificar el agotamiento de IPs..."
-    for i in {1..3}; do
+    for i in {1..4}; do
         $CLIENT_BIN &
         CLIENT_PIDS[$i]=$!
     done

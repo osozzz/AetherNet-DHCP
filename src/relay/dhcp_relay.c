@@ -6,7 +6,12 @@ dhcp_transaction_t* hash_table[HASH_TABLE_SIZE] = { NULL };
 
 void init_dhcp_relay() {
     struct sockaddr_in relay_addr, server_addr;
-    const char* server_ip = "172.19.2.228";
+    // Leer la IP del servidor DHCP desde una variable de entorno
+    const char* server_ip = getenv("SERVER_IP");
+    if (server_ip == NULL) {
+        fprintf(stderr, "Error: La variable de entorno SERVER_IP no está definida.\n");
+        exit(EXIT_FAILURE);
+    }
 
     // Crear el socket para el relay
     int relay_sock = socket(AF_INET, SOCK_DGRAM, 0);
