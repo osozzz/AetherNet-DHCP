@@ -45,8 +45,7 @@ El cliente realiza las siguientes funciones:
 11. **Apagado y limpieza del servidor de manera controlada:** Se implementó lógica para apagar el servidor de manera controlada y liberar los recursos como hilos y sockets.
 
 ### **Aspectos No logrados:**
-- **Optimización avanzada de recursos:** Aunque se implementó la funcionalidad básica de multithreading, no se optimizó para la carga extrema de clientes concurrentes.
-- **Escalabilidad en ambientes distribuidos:** No se incluyeron funciones avanzadas de escalabilidad para ejecutar el servidor en entornos distribuidos o con balanceo de carga.
+- **Despliegue en AWS Academy:** La idea de desplegar la solución en la nube mediante AWS Academy era un paso clave para validar el funcionamiento del servidor y cliente en un entorno de producción real. Aunque se iniciaron los preparativos para el despliegue, no se logró completar la configuración en AWS. El proceso de integrar la solución con la infraestructura de red en AWS resultó ser más complejo de lo anticipado, lo que dificultó finalizar este objetivo dentro del plazo.
 
 ---
 
