@@ -27,12 +27,12 @@
 - [x] La aplicación cliente puede ser desarrollada en cualquier lenguaje que soporte la API de Berkeley Sockets.
 - [x] La aplicación servidor debe ser implementada exclusivamente en lenguaje C.
 - [x] No utilizar clases de sockets existentes o personalizadas, solo la API de Sockets Berkeley.
-- [ ] Desplegar el servidor en un servidor en la nube utilizando AWS Academy.
+- [x] Desplegar el servidor en un servidor en la nube utilizando AWS Academy.
 - [x] Documentar el diseño e implementación usando herramientas como UML.
 - [x] Documentar el diseño e implementación usando herramientas como UML.
 - [x] Trabajar en equipos de hasta 3 personas.
 - [x] Definir un cronograma con hitos y victorias tempranas, dedicando el 60% del tiempo al servidor y 40% al cliente.
 - [x] Usar un repositorio Git privado para la gestión del código.
 - [x] Documentar el proyecto en un archivo README.md con las secciones: Introducción, Desarrollo, Aspectos Logrados/No logrados, Conclusiones y Referencias.
-- [ ] Crear un video explicando el proceso de diseño, desarrollo y ejecución, no mayor a 15 minutos.
+- [x] Crear un video explicando el proceso de diseño, desarrollo y ejecución, no mayor a 15 minutos.
 - [x] Entregar el proyecto antes del 18 de octubre de 2024 mediante el buzón de Interactiva Virtual, incluyendo el enlace al repositorio GitHub.

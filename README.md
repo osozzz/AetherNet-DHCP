@@ -45,7 +45,7 @@ El cliente realiza las siguientes funciones:
 11. **Apagado y limpieza del servidor de manera controlada:** Se implementó lógica para apagar el servidor de manera controlada y liberar los recursos como hilos y sockets.
 
 ### **Aspectos No logrados:**
-- **Despliegue en AWS Academy:** La idea de desplegar la solución en la nube mediante AWS Academy era un paso clave para validar el funcionamiento del servidor y cliente en un entorno de producción real. Aunque se iniciaron los preparativos para el despliegue, no se logró completar la configuración en AWS. El proceso de integrar la solución con la infraestructura de red en AWS resultó ser más complejo de lo anticipado, lo que dificultó finalizar este objetivo dentro del plazo.
+- La implementación del servidor DHCP fue funcional, pero podria ser más robusto para soportar un entorno de producción. Presenta limitaciones en términos de escalabilidad y administración de direcciones IP, lo que podría mejorarse para optimizar su rendimiento y adaptarse mejor a redes más complejas.
 
 ---
 

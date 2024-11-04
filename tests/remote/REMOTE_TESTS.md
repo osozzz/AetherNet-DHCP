@@ -1,6 +1,6 @@
-# Casos de Prueba para Proyecto DHCP
+# Casos de Prueba para Proyecto DHCP de Docker
 
-Este documento describe los casos de prueba implementados para verificar el correcto funcionamiento del sistema DHCP desarrollado. El script `dhcp_tests.sh` ejecuta estos casos de prueba de forma automática.
+Este documento describe los casos de prueba implementados para verificar el correcto funcionamiento del sistema DHCP desarrollado. Se ejecutan los comandos para docker desktop y se verifica que el servidor DHCP asigne correctamente las direcciones IP a los clientes.
 
 ## Caso de Prueba 1: Asignación de IP válida
 
@@ -22,4 +22,4 @@ Este documento describe los casos de prueba implementados para verificar el corr
 
 ---
 
-Cada caso de prueba se ejecuta con un intervalo de al menos 32 segundos para permitir la renovación y expiración de las direcciones IP asignadas.
+Estos casos de prueba se ejecutan en el entorno de Docker Desktop y se verifica que el servidor DHCP asigne correctamente las direcciones IP a los clientes.
